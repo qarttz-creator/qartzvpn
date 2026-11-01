@@ -231,6 +231,25 @@ public class MainForm : Form
         };
         save.Click += (_, _) =>
         {
+            var bad = new List<string>();
+            int n = 0;
+            foreach (var raw in tb.Lines)
+            {
+                n++;
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#")) continue;
+                try { VlessProfile.Parse(line); }
+                catch { bad.Add($"строка {n}: {(line.Length > 48 ? line.Substring(0, 48) + "…" : line)}"); }
+            }
+            if (bad.Count > 0)
+            {
+                MessageBox.Show(
+                    "Не сохранено — это не похоже на vless:// ссылку:\n\n" + string.Join("\n", bad) +
+                    "\n\nВставьте ссылку целиком из 3x-ui (вкладка «Ссылки»), вида\n" +
+                    "vless://UUID@HOST:PORT?...#ИмяСервера.\nКомментарии — строкой, начинающейся с #.",
+                    "Проверка профилей", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             try
             {
                 var keep = _combo.SelectedItem as string;
@@ -278,6 +297,29 @@ public class MainForm : Form
         };
         save.Click += (_, _) =>
         {
+            var bad = new List<string>();
+            int n = 0;
+            foreach (var raw in tb.Lines)
+            {
+                n++;
+                var line = raw;
+                var h = line.IndexOf('#');
+                if (h >= 0) line = line.Substring(0, h);
+                line = line.Trim();
+                if (line.Length == 0) continue;
+                var test = line.Contains('/') ? line : line + (line.Contains(':') ? "/128" : "/32");
+                if (!System.Net.IPNetwork.TryParse(test, out _))
+                    bad.Add($"строка {n}: {raw.Trim()}");
+            }
+            if (bad.Count > 0)
+            {
+                MessageBox.Show(
+                    "Не сохранено — это не похоже на IP или подсеть:\n\n" + string.Join("\n", bad) +
+                    "\n\nВерный формат: 10.0.0.0/8, 192.168.1.0/24 или один адрес 192.168.1.50.\n" +
+                    "Комментарий можно писать после #.",
+                    "Проверка исключений", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             try { File.WriteAllText(ExcludePath, tb.Text); } catch (Exception ex) { MessageBox.Show(ex.Message); }
             f.Close();
         };

@@ -20,6 +20,8 @@ public class VlessProfile
     {
         link = link.Trim();
         var uri = new Uri(link);
+        if (!string.Equals(uri.Scheme, "vless", StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("ссылка должна начинаться с vless://");
         var p = new VlessProfile
         {
             Raw = link,
