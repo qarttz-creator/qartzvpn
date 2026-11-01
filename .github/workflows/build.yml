@@ -97,7 +97,9 @@ jobs:
         run: |
           $tag = '${{ steps.ver.outputs.tag }}'
           gh release delete $tag --yes --cleanup-tag 2>$null
-          Write-Host "Старый $tag убран (если был), тег пересоздастся на текущем коммите."
+          if ($LASTEXITCODE -ne 0) { Write-Host "Релиза $tag ещё не было — нечего удалять." }
+          else { Write-Host "Старый $tag убран, тег пересоздастся на текущем коммите." }
+          exit 0
 
       - name: Создать релиз
         if: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true') }}
