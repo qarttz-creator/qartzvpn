@@ -55,8 +55,10 @@ Name: "{group}\{cm:UninstallProgram,Qarttz VPN}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Qarttz VPN"; Filename: "{app}\QarttzVPN.exe"; Tasks: desktopicon
 
 [Run]
+; shellexec — иначе запуск admin-приложения из админского установщика падает
+; с "требуется повышение" (CreateProcess не умеет авто-elevation).
 Filename: "{app}\QarttzVPN.exe"; Description: "{cm:LaunchProgram,Qarttz VPN}"; \
-  Flags: nowait postinstall skipifsilent
+  Flags: nowait postinstall skipifsilent shellexec
 
 [UninstallRun]
 ; На всякий случай гасим ядра перед удалением, чтобы файлы не были заняты.
