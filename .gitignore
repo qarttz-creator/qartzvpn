@@ -1,0 +1,18 @@
+# сборка .NET
+bin/
+obj/
+*.user
+publish/
+
+# ядра не храним в репозитории — их качает CI при сборке
+core/*.exe
+core/VERSIONS.txt
+
+# артефакты установщика
+installer/output/
+*.zip
+
+# runtime-файлы клиента
+xray-runtime.json
+runtime-config.json
+qvpn.log

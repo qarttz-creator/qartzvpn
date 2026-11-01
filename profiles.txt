@@ -1,0 +1,6 @@
+# Профили серверов — по одной vless-ссылке на строку.
+# Имя в списке берётся из части после # в конце ссылки.
+# Строки, начинающиеся с #, игнорируются (это комментарии).
+# Ссылки копируются из 3x-ui (вкладка "Ссылки" у клиента).
+
+vless://edb92128-faef-40f6-9eb1-b794c7467e97@45.12.75.173:8443?encryption=none&flow=&fp=chrome&pbk=yomHHVG1uN_DIC1wB3NZBOfPZLPC7DTDm76PTeSqdV8&security=reality&serviceName=Tun9xPqR&sid=91b660eb&sni=blog.api.www.cloudflare.com&spx=%2F40e4543c6f0e25a&type=grpc#RF-grpc

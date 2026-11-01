@@ -1,0 +1,94 @@
+name: build
+
+on:
+  push:
+    tags: ['v*']          # пуш тега vX.Y.Z -> соберётся и выложится релиз
+  workflow_dispatch:       # ручной запуск из вкладки Actions
+    inputs:
+      version:
+        description: 'Версия (например 1.0.0)'
+        default: '0.0.0-dev'
+
+permissions:
+  contents: write           # нужно, чтобы создать релиз и приложить setup.exe
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Версия
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $v = $env:GITHUB_REF_NAME.TrimStart('v')
+          } elseif ('${{ github.event.inputs.version }}') {
+            $v = '${{ github.event.inputs.version }}'
+          } else {
+            $v = '0.0.0-dev'
+          }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Версия сборки: $v"
+
+      - name: Сборка приложения
+        shell: pwsh
+        run: >
+          dotnet publish QarttzVPN.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -o publish
+
+      - name: Скачать ядра xray и sing-box
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force publish\core | Out-Null
+
+          # --- Xray-core (последний релиз) ---
+          $xrayTag = gh api repos/XTLS/Xray-core/releases/latest --jq .tag_name
+          Write-Host "Xray: $xrayTag"
+          curl.exe -fL -o xray.zip "https://github.com/XTLS/Xray-core/releases/download/$xrayTag/Xray-windows-64.zip"
+          Expand-Archive xray.zip -DestinationPath xray -Force
+          Copy-Item xray\xray.exe publish\core\xray.exe -Force
+
+          # --- sing-box (последний СТАБИЛЬНЫЙ релиз, не alpha/beta) ---
+          $sbTag = gh api repos/SagerNet/sing-box/releases/latest --jq .tag_name
+          $sbVer = $sbTag.TrimStart('v')
+          Write-Host "sing-box: $sbTag"
+          curl.exe -fL -o sb.zip "https://github.com/SagerNet/sing-box/releases/download/$sbTag/sing-box-$sbVer-windows-amd64.zip"
+          Expand-Archive sb.zip -DestinationPath sb -Force
+          Copy-Item "sb\sing-box-$sbVer-windows-amd64\sing-box.exe" publish\core\sing-box.exe -Force
+
+          "Xray $xrayTag`nsing-box $sbTag" | Out-File -Encoding utf8 publish\core\VERSIONS.txt
+          Get-ChildItem publish\core
+
+      - name: Установить Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Собрать установщик
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.ver.outputs.version }} installer\QarttzVPN.iss
+
+      - name: Выложить артефакт сборки
+        uses: actions/upload-artifact@v4
+        with:
+          name: QarttzVPN-Setup
+          path: installer\output\QarttzVPN-Setup.exe
+
+      - name: Создать релиз (только для тега)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer\output\QarttzVPN-Setup.exe
+          name: Qarttz VPN ${{ steps.ver.outputs.version }}
+          body: |
+            Установщик Qarttz VPN. Ядра xray и sing-box уже внутри (см. core/VERSIONS.txt).
+            Запустить setup, затем кнопка «Подключить». Нужны права администратора.

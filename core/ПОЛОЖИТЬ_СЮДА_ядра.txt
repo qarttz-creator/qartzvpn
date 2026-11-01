@@ -1,0 +1,18 @@
+В эту папку нужно положить ДВА файла:
+
+1) xray.exe   — reality-туннель (держит соединение с сервером)
+   https://github.com/XTLS/Xray-core/releases  ->  Xray-windows-64.zip  ->  xray.exe
+
+2) sing-box.exe — TUN (заворачивает весь трафик ОС в туннель)
+   https://github.com/SagerNet/sing-box/releases  ->  последняя СТАБИЛЬНАЯ 1.14.x
+   (sing-box-1.14.x-windows-amd64.zip -> sing-box.exe). Не брать 1.15.x (alpha).
+
+wintun отдельной dll НЕ нужен — sing-box несёт его внутри себя.
+
+Почему два движка: sing-box сам по себе не согласует постквантовый reality этого
+xray-сервера, поэтому reality обрабатывает xray (полная совместимость, это движок
+v2rayTun), а TUN/маршруты/kill-switch делает sing-box. xray слушает SOCKS на
+127.0.0.1:10808, sing-box гонит туда весь трафик.
+
+Если TUN не поднимается ("configure tun interface: cannot find the file") —
+перезагрузи Windows (драйвер wintun залипает после неудачных попыток).
