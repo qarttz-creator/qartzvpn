@@ -44,9 +44,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#SrcDir}\*"; DestDir: "{app}"; \
   Excludes: "*.pdb,ПОЛОЖИТЬ_СЮДА_ядра.txt,exclude.txt,profiles.txt"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
-; profiles.txt обновляем всегда (список серверов раздаём мы).
-Source: "{#SrcDir}\profiles.txt"; DestDir: "{app}"; Flags: ignoreversion
-; exclude.txt — это правки пользователя, при обновлении НЕ затираем.
+; profiles.txt и exclude.txt — пользователь правит их из клиента, при обновлении НЕ затираем.
+Source: "{#SrcDir}\profiles.txt"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Source: "{#SrcDir}\exclude.txt"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
 [Icons]

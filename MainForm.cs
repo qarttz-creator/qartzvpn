@@ -7,6 +7,7 @@ public class MainForm : Form
     private readonly SingBoxManager _mgr = new();
     private readonly ComboBox _combo = new();
     private readonly Button _btn = new();
+    private readonly Button _prof = new();
     private readonly Button _excl = new();
     private readonly Label _status = new();
     private readonly NotifyIcon _tray = new();
@@ -56,16 +57,25 @@ public class MainForm : Form
         _btn.BackColor = Color.FromArgb(0, 120, 215);
         _btn.Click += (_, _) => Toggle();
 
-        _excl.Text = "Исключения (IP мимо туннеля)…";
+        _prof.Text = "Профили…";
+        _prof.Font = new Font("Segoe UI", 9);
+        _prof.Size = new Size(155, 30);
+        _prof.Location = new Point(20, 194);
+        _prof.FlatStyle = FlatStyle.Flat;
+        _prof.ForeColor = Color.Gainsboro;
+        _prof.BackColor = Color.FromArgb(45, 45, 52);
+        _prof.Click += (_, _) => EditProfiles();
+
+        _excl.Text = "Исключения…";
         _excl.Font = new Font("Segoe UI", 9);
-        _excl.Size = new Size(240, 30);
-        _excl.Location = new Point((ClientSize.Width - 240) / 2, 194);
+        _excl.Size = new Size(155, 30);
+        _excl.Location = new Point(185, 194);
         _excl.FlatStyle = FlatStyle.Flat;
         _excl.ForeColor = Color.Gainsboro;
         _excl.BackColor = Color.FromArgb(45, 45, 52);
         _excl.Click += (_, _) => EditExcludes();
 
-        Controls.AddRange(new Control[] { lbl, _combo, _status, _btn, _excl });
+        Controls.AddRange(new Control[] { lbl, _combo, _status, _btn, _prof, _excl });
 
         _tray.Text = "Qarttz VPN";
         _tray.Icon = SystemIcons.Shield;
@@ -181,6 +191,62 @@ public class MainForm : Form
             _combo.Enabled = true;
             _tray.Text = "Qarttz VPN — отключено";
         }
+    }
+
+    private void EditProfiles()
+    {
+        var f = new Form
+        {
+            Text = "Профили серверов — по одной vless:// ссылке на строку",
+            ClientSize = new Size(560, 420),
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false, MinimizeBox = false
+        };
+        var tb = new TextBox
+        {
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            AcceptsReturn = true,
+            Font = new Font("Consolas", 9),
+            Location = new Point(10, 10),
+            Size = new Size(540, 340)
+        };
+        tb.Text = File.Exists(ProfilesPath) ? File.ReadAllText(ProfilesPath) : "";
+        var hint = new Label
+        {
+            Text = "Вставьте vless:// ссылку из 3x-ui (вкладка «Ссылки»). Имя в списке — "
+                 + "из части после # в конце ссылки. Строки, начинающиеся с #, — комментарии.",
+            AutoSize = false,
+            ForeColor = Color.Gray,
+            Location = new Point(12, 356),
+            Size = new Size(400, 54)
+        };
+        var save = new Button
+        {
+            Text = "Сохранить",
+            Size = new Size(140, 34),
+            Location = new Point(410, 372)
+        };
+        save.Click += (_, _) =>
+        {
+            try
+            {
+                var keep = _combo.SelectedItem as string;
+                File.WriteAllText(ProfilesPath, tb.Text);
+                LoadProfiles();
+                if (keep != null)
+                {
+                    var i = _combo.Items.IndexOf(keep);
+                    if (i >= 0) _combo.SelectedIndex = i;
+                }
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message); }
+            f.Close();
+        };
+        f.Controls.AddRange(new Control[] { tb, hint, save });
+        f.ShowDialog(this);
     }
 
     private void EditExcludes()
