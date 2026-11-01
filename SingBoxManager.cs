@@ -60,10 +60,19 @@ public class SingBoxManager
         if (!File.Exists(ExcludePath)) return list;
         foreach (var raw in File.ReadAllLines(ExcludePath))
         {
-            var line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith("#")) continue;
+            var line = raw;
+            // срезаем хвостовой/полный комментарий (всё после #)
+            var h = line.IndexOf('#');
+            if (h >= 0) line = line.Substring(0, h);
+            line = line.Trim();
+            if (line.Length == 0) continue;
+            // без префикса — считаем одиночным адресом
             if (!line.Contains('/')) line += line.Contains(':') ? "/128" : "/32";
-            list.Add(line);
+            // валидируем: кривая строка не должна ронять весь туннель
+            if (System.Net.IPNetwork.TryParse(line, out _))
+                list.Add(line);
+            else
+                L($"Пропущена некорректная строка исключений: '{raw.Trim()}'");
         }
         return list;
     }
