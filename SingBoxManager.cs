@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace QarttzVPN;
 
@@ -15,6 +16,14 @@ public class SingBoxManager
 {
     public event Action<string>? Log;
     public event Action<bool>? StateChanged;
+
+    // В single-file сборке рефлексивный сериализатор JSON по умолчанию выключен,
+    // поэтому задаём resolver явно — иначе ToJsonString(options) падает.
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = true,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+    };
 
     private Process? _xray;
     private Process? _singbox;
@@ -77,7 +86,7 @@ public class SingBoxManager
             },
             ["outbounds"] = new JsonArray { profile.BuildXrayOutbound() }
         };
-        File.WriteAllText(XrayConfigPath, cfg.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(XrayConfigPath, cfg.ToJsonString(JsonOpts));
         L($"xray-конфиг профиля '{profile.Name}' создан ({profile.Host}:{profile.Port}).");
     }
 
@@ -112,8 +121,7 @@ public class SingBoxManager
             L($"Пользовательских исключений: {excludes.Count}");
         }
 
-        File.WriteAllText(RuntimeConfigPath,
-            root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(RuntimeConfigPath, root.ToJsonString(JsonOpts));
     }
 
     private Process StartProc(string file, string args, string workDir, string label)
