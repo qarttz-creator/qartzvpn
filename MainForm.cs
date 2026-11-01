@@ -9,6 +9,7 @@ public class MainForm : Form
     private readonly Button _btn = new();
     private readonly Button _prof = new();
     private readonly Button _excl = new();
+    private readonly Button _apps = new();
     private readonly Label _status = new();
     private readonly NotifyIcon _tray = new();
     private readonly List<VlessProfile> _profiles = new();
@@ -16,11 +17,12 @@ public class MainForm : Form
 
     private string ProfilesPath => Path.Combine(AppContext.BaseDirectory, "profiles.txt");
     private string ExcludePath  => Path.Combine(AppContext.BaseDirectory, "exclude.txt");
+    private string AppsPath     => Path.Combine(AppContext.BaseDirectory, "apps.txt");
 
     public MainForm()
     {
         Text = "Qarttz VPN";
-        ClientSize = new Size(360, 250);
+        ClientSize = new Size(360, 300);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -57,25 +59,22 @@ public class MainForm : Form
         _btn.BackColor = Color.FromArgb(0, 120, 215);
         _btn.Click += (_, _) => Toggle();
 
-        _prof.Text = "Профили…";
-        _prof.Font = new Font("Segoe UI", 9);
-        _prof.Size = new Size(155, 30);
-        _prof.Location = new Point(20, 194);
-        _prof.FlatStyle = FlatStyle.Flat;
-        _prof.ForeColor = Color.Gainsboro;
-        _prof.BackColor = Color.FromArgb(45, 45, 52);
-        _prof.Click += (_, _) => EditProfiles();
+        void StyleCfgButton(Button b, string text, int y, Action onClick)
+        {
+            b.Text = text;
+            b.Font = new Font("Segoe UI", 9);
+            b.Size = new Size(240, 30);
+            b.Location = new Point((ClientSize.Width - 240) / 2, y);
+            b.FlatStyle = FlatStyle.Flat;
+            b.ForeColor = Color.Gainsboro;
+            b.BackColor = Color.FromArgb(45, 45, 52);
+            b.Click += (_, _) => onClick();
+        }
+        StyleCfgButton(_prof, "Профили…", 194, EditProfiles);
+        StyleCfgButton(_excl, "Исключения по IP…", 228, EditExcludes);
+        StyleCfgButton(_apps, "Приложения мимо туннеля…", 262, EditApps);
 
-        _excl.Text = "Исключения…";
-        _excl.Font = new Font("Segoe UI", 9);
-        _excl.Size = new Size(155, 30);
-        _excl.Location = new Point(185, 194);
-        _excl.FlatStyle = FlatStyle.Flat;
-        _excl.ForeColor = Color.Gainsboro;
-        _excl.BackColor = Color.FromArgb(45, 45, 52);
-        _excl.Click += (_, _) => EditExcludes();
-
-        Controls.AddRange(new Control[] { lbl, _combo, _status, _btn, _prof, _excl });
+        Controls.AddRange(new Control[] { lbl, _combo, _status, _btn, _prof, _excl, _apps });
 
         _tray.Text = "Qarttz VPN";
         _tray.Icon = SystemIcons.Shield;
@@ -262,6 +261,75 @@ public class MainForm : Form
                 }
             }
             catch (Exception ex) { MessageBox.Show(ex.Message); }
+            f.Close();
+        };
+        f.Controls.AddRange(new Control[] { tb, hint, save });
+        f.ShowDialog(this);
+    }
+
+    private void EditApps()
+    {
+        var f = new Form
+        {
+            Text = "Приложения мимо туннеля — по одному имени .exe на строку",
+            ClientSize = new Size(480, 420),
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false, MinimizeBox = false
+        };
+        var tb = new TextBox
+        {
+            Multiline = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            AcceptsReturn = true,
+            Font = new Font("Consolas", 10),
+            Location = new Point(10, 10),
+            Size = new Size(460, 330)
+        };
+        tb.Text = File.Exists(AppsPath) ? File.ReadAllText(AppsPath) : "";
+        var hint = new Label
+        {
+            Text = "Трафик этих программ пойдёт НАПРЯМУЮ, мимо VPN (для игр и т.п., у которых "
+                 + "адреса неизвестны). Пишите имя исполняемого файла, напр. Discord.exe. "
+                 + "Комментарий — после #.",
+            AutoSize = false,
+            ForeColor = Color.Gray,
+            Location = new Point(12, 346),
+            Size = new Size(320, 64)
+        };
+        var save = new Button
+        {
+            Text = "Сохранить",
+            Size = new Size(140, 34),
+            Location = new Point(330, 372)
+        };
+        save.Click += (_, _) =>
+        {
+            var bad = new List<string>();
+            int n = 0;
+            foreach (var raw in tb.Lines)
+            {
+                n++;
+                var line = raw;
+                var h = line.IndexOf('#');
+                if (h >= 0) line = line.Substring(0, h);
+                line = line.Trim();
+                if (line.Length == 0) continue;
+                var okName = !line.Contains('\\') && !line.Contains('/')
+                             && line.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
+                if (!okName) bad.Add($"строка {n}: {raw.Trim()}");
+            }
+            if (bad.Count > 0)
+            {
+                MessageBox.Show(
+                    "Не сохранено — укажите имя исполняемого файла (.exe), без пути:\n\n" +
+                    string.Join("\n", bad) +
+                    "\n\nПример: Discord.exe  или  game.exe",
+                    "Проверка приложений", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            try { File.WriteAllText(AppsPath, tb.Text); } catch (Exception ex) { MessageBox.Show(ex.Message); }
             f.Close();
         };
         f.Controls.AddRange(new Control[] { tb, hint, save });

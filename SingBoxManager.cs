@@ -52,6 +52,7 @@ public class SingBoxManager
     private string XrayConfigPath    => Path.Combine(_baseDir, "xray-runtime.json");
     private string TemplatePath      => Path.Combine(_baseDir, "config.template.json");
     private string ExcludePath       => Path.Combine(_baseDir, "exclude.txt");
+    private string AppsPath          => Path.Combine(_baseDir, "apps.txt");
     private string RuntimeConfigPath => Path.Combine(_baseDir, "runtime-config.json");
 
     private List<string> ReadExcludes()
@@ -73,6 +74,28 @@ public class SingBoxManager
                 list.Add(line);
             else
                 L($"Пропущена некорректная строка исключений: '{raw.Trim()}'");
+        }
+        return list;
+    }
+
+    private List<string> ReadApps()
+    {
+        var list = new List<string>();
+        if (!File.Exists(AppsPath)) return list;
+        foreach (var raw in File.ReadAllLines(AppsPath))
+        {
+            var line = raw;
+            var h = line.IndexOf('#');
+            if (h >= 0) line = line.Substring(0, h);
+            line = line.Trim();
+            if (line.Length == 0) continue;
+            // нужно имя процесса (Discord.exe), а не путь
+            if (line.Contains('\\') || line.Contains('/'))
+            {
+                L($"Пропущено (нужно имя exe, не путь): '{raw.Trim()}'");
+                continue;
+            }
+            list.Add(line);
         }
         return list;
     }
@@ -128,6 +151,16 @@ public class SingBoxManager
             foreach (var c in excludes) arr.Add(c);
             rules.Add(new JsonObject { ["ip_cidr"] = arr, ["action"] = "route", ["outbound"] = "direct" });
             L($"Пользовательских исключений: {excludes.Count}");
+        }
+
+        // 3) исключения по приложениям (трафик этих exe идёт напрямую, мимо туннеля)
+        var apps = ReadApps();
+        if (apps.Count > 0)
+        {
+            var arr = new JsonArray();
+            foreach (var a in apps) arr.Add(a);
+            rules.Add(new JsonObject { ["process_name"] = arr, ["action"] = "route", ["outbound"] = "direct" });
+            L($"Приложений мимо туннеля: {apps.Count} ({string.Join(", ", apps)})");
         }
 
         File.WriteAllText(RuntimeConfigPath, root.ToJsonString(JsonOpts));

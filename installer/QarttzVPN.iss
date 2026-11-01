@@ -42,11 +42,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Всё из publish, кроме символов и пользовательских файлов (их кладём отдельно).
 Source: "{#SrcDir}\*"; DestDir: "{app}"; \
-  Excludes: "*.pdb,ПОЛОЖИТЬ_СЮДА_ядра.txt,exclude.txt,profiles.txt"; \
+  Excludes: "*.pdb,ПОЛОЖИТЬ_СЮДА_ядра.txt,exclude.txt,profiles.txt,apps.txt"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
-; profiles.txt и exclude.txt — пользователь правит их из клиента, при обновлении НЕ затираем.
+; эти три файла пользователь правит из клиента, при обновлении НЕ затираем.
 Source: "{#SrcDir}\profiles.txt"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Source: "{#SrcDir}\exclude.txt"; DestDir: "{app}"; Flags: onlyifdoesntexist
+Source: "{#SrcDir}\apps.txt"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
 [Icons]
 Name: "{group}\Qarttz VPN"; Filename: "{app}\QarttzVPN.exe"
