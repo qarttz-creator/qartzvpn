@@ -35,4 +35,12 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- арт внутри exe -->
+    <EmbeddedResource Include="assets\background.png" />
+    <EmbeddedResource Include="assets\power_idle.png" />
+    <EmbeddedResource Include="assets\power_active.png" />
+    <EmbeddedResource Include="assets\gear.png" />
+  </ItemGroup>
+
 </Project>

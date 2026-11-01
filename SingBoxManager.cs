@@ -3,7 +3,6 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization.Metadata;
 
 namespace QarttzVPN;
 
@@ -16,14 +15,6 @@ public class SingBoxManager
 {
     public event Action<string>? Log;
     public event Action<bool>? StateChanged;
-
-    // В single-file сборке рефлексивный сериализатор JSON по умолчанию выключен,
-    // поэтому задаём resolver явно — иначе ToJsonString(options) падает.
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        WriteIndented = true,
-        TypeInfoResolver = new DefaultJsonTypeInfoResolver()
-    };
 
     private Process? _xray;
     private Process? _singbox;
@@ -118,7 +109,7 @@ public class SingBoxManager
             },
             ["outbounds"] = new JsonArray { profile.BuildXrayOutbound() }
         };
-        File.WriteAllText(XrayConfigPath, cfg.ToJsonString(JsonOpts));
+        File.WriteAllText(XrayConfigPath, cfg.ToJsonString(Json.Opts));
         L($"xray-конфиг профиля '{profile.Name}' создан ({profile.Host}:{profile.Port}).");
     }
 
@@ -143,27 +134,42 @@ public class SingBoxManager
             L("ВНИМАНИЕ: не удалось определить IP сервера для исключения.");
         }
 
-        // 2) пользовательские исключения
-        var excludes = ReadExcludes();
-        if (excludes.Count > 0)
+        // Фильтры применяются только при включённой маршрутизации.
+        var st = Settings.Load();
+        if (!st.Routing)
         {
-            var arr = new JsonArray();
-            foreach (var c in excludes) arr.Add(c);
-            rules.Add(new JsonObject { ["ip_cidr"] = arr, ["action"] = "route", ["outbound"] = "direct" });
-            L($"Пользовательских исключений: {excludes.Count}");
+            L("Маршрутизация выключена — весь трафик в туннель (исключения не применяются).");
+        }
+        else
+        {
+            // 2) пользовательские исключения по IP
+            if (st.IpFilter)
+            {
+                var excludes = ReadExcludes();
+                if (excludes.Count > 0)
+                {
+                    var arr = new JsonArray();
+                    foreach (var c in excludes) arr.Add(c);
+                    rules.Add(new JsonObject { ["ip_cidr"] = arr, ["action"] = "route", ["outbound"] = "direct" });
+                    L($"Фильтр по IP включён, исключений: {excludes.Count}");
+                }
+            }
+
+            // 3) исключения по приложениям (трафик этих exe идёт напрямую)
+            if (st.AppsFilter)
+            {
+                var apps = ReadApps();
+                if (apps.Count > 0)
+                {
+                    var arr = new JsonArray();
+                    foreach (var a in apps) arr.Add(a);
+                    rules.Add(new JsonObject { ["process_name"] = arr, ["action"] = "route", ["outbound"] = "direct" });
+                    L($"Фильтр по приложениям включён: {apps.Count} ({string.Join(", ", apps)})");
+                }
+            }
         }
 
-        // 3) исключения по приложениям (трафик этих exe идёт напрямую, мимо туннеля)
-        var apps = ReadApps();
-        if (apps.Count > 0)
-        {
-            var arr = new JsonArray();
-            foreach (var a in apps) arr.Add(a);
-            rules.Add(new JsonObject { ["process_name"] = arr, ["action"] = "route", ["outbound"] = "direct" });
-            L($"Приложений мимо туннеля: {apps.Count} ({string.Join(", ", apps)})");
-        }
-
-        File.WriteAllText(RuntimeConfigPath, root.ToJsonString(JsonOpts));
+        File.WriteAllText(RuntimeConfigPath, root.ToJsonString(Json.Opts));
     }
 
     private Process StartProc(string file, string args, string workDir, string label)
