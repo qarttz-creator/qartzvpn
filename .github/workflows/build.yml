@@ -89,6 +89,16 @@ jobs:
           name: QarttzVPN-Setup
           path: installer\output\QarttzVPN-Setup.exe
 
+      - name: Снести прошлый релиз/тег этой версии (при ручном релизе)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.ver.outputs.tag }}'
+          gh release delete $tag --yes --cleanup-tag 2>$null
+          Write-Host "Старый $tag убран (если был), тег пересоздастся на текущем коммите."
+
       - name: Создать релиз
         if: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true') }}
         uses: softprops/action-gh-release@v2
