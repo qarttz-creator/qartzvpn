@@ -21,7 +21,7 @@ public class SettingsForm : Form
     public SettingsForm()
     {
         Text = "Настройки — QartzVPN";
-        ClientSize = new Size(430, 380);
+        ClientSize = new Size(440, 400);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -57,37 +57,39 @@ public class SettingsForm : Form
         };
 
         // IP-фильтр
-        _ipF.Text = "Фильтр по IP (адреса/подсети мимо туннеля)";
+        _ipF.Text = "Фильтр по IP";
         _ipF.ForeColor = Fg; _ipF.BackColor = Color.Transparent; _ipF.Font = new Font("Segoe UI", 9.5f);
-        _ipF.Location = new Point(40, 212); _ipF.AutoSize = true;
+        _ipF.Location = new Point(40, 210); _ipF.AutoSize = true;
         _ipF.Checked = _st.IpFilter;
-        _ipEdit = FlatButton("Список IP…", new Point(300, 208), 110);
+        var ipSub = Sub("адреса и подсети мимо туннеля", 232);
+        _ipEdit = FlatButton("Список IP…", new Point(285, 210), 135);
         _ipEdit.Click += (_, _) => EditExcludes();
 
         // Фильтр приложений
-        _appF.Text = "Фильтр по приложениям (exe мимо туннеля)";
+        _appF.Text = "Фильтр по приложениям";
         _appF.ForeColor = Fg; _appF.BackColor = Color.Transparent; _appF.Font = new Font("Segoe UI", 9.5f);
-        _appF.Location = new Point(40, 250); _appF.AutoSize = true;
+        _appF.Location = new Point(40, 258); _appF.AutoSize = true;
         _appF.Checked = _st.AppsFilter;
-        _appEdit = FlatButton("Список приложений…", new Point(300, 246), 110);
+        var appSub = Sub("выбранные .exe идут напрямую (игры и т.п.)", 280);
+        _appEdit = FlatButton("Список приложений…", new Point(285, 258), 135);
         _appEdit.Click += (_, _) => EditApps();
 
         var applyHint = new Label
         {
             Text = "Изменения применяются при следующем подключении.",
             ForeColor = Color.Gray, BackColor = Color.Transparent,
-            Location = new Point(20, 296), Size = new Size(390, 20), Font = new Font("Segoe UI", 8)
+            Location = new Point(20, 312), Size = new Size(400, 20), Font = new Font("Segoe UI", 8)
         };
 
-        var save = FlatButton("Сохранить", new Point(220, 326), 95);
+        var save = FlatButton("Сохранить", new Point(228, 344), 95);
         save.BackColor = Color.FromArgb(0, 120, 215); save.ForeColor = Color.White;
         save.Click += (_, _) => { SaveState(); Close(); };
-        var cancel = FlatButton("Отмена", new Point(325, 326), 85);
+        var cancel = FlatButton("Отмена", new Point(333, 344), 85);
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[] {
             hProf, pInfo, pEdit, hRoute, _routing, rHint,
-            _ipF, _ipEdit, _appF, _appEdit, applyHint, save, cancel
+            _ipF, ipSub, _ipEdit, _appF, appSub, _appEdit, applyHint, save, cancel
         });
 
         Sync();
@@ -115,6 +117,12 @@ public class SettingsForm : Form
         Text = text, ForeColor = Color.FromArgb(150, 180, 255), BackColor = Color.Transparent,
         Font = new Font("Segoe UI", 11, FontStyle.Bold),
         Location = new Point(18, y), AutoSize = true
+    };
+
+    private Label Sub(string text, int y) => new()
+    {
+        Text = text, ForeColor = Color.Gray, BackColor = Color.Transparent,
+        Font = new Font("Segoe UI", 8), Location = new Point(40, y), Size = new Size(235, 18)
     };
 
     private Button FlatButton(string text, Point loc, int w)
