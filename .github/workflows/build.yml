@@ -8,6 +8,10 @@ on:
       version:
         description: 'Версия (например 1.0.0)'
         default: '0.0.0-dev'
+      release:
+        description: 'Создать релиз в Releases (иначе только артефакт)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write           # нужно, чтобы создать релиз и приложить setup.exe
@@ -27,14 +31,16 @@ jobs:
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            $v = $env:GITHUB_REF_NAME.TrimStart('v')
-          } elseif ('${{ github.event.inputs.version }}') {
-            $v = '${{ github.event.inputs.version }}'
+            $tag = $env:GITHUB_REF_NAME
+            $v = $tag.TrimStart('v')
           } else {
-            $v = '0.0.0-dev'
+            $v = '${{ github.event.inputs.version }}'
+            if (-not $v) { $v = '0.0.0-dev' }
+            $tag = "v$v"
           }
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Версия сборки: $v"
+          "tag=$tag"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Версия сборки: $v (тег $tag)"
 
       - name: Сборка приложения
         shell: pwsh
@@ -83,10 +89,12 @@ jobs:
           name: QarttzVPN-Setup
           path: installer\output\QarttzVPN-Setup.exe
 
-      - name: Создать релиз (только для тега)
-        if: github.ref_type == 'tag'
+      - name: Создать релиз
+        if: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true') }}
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: installer\output\QarttzVPN-Setup.exe
           name: Qarttz VPN ${{ steps.ver.outputs.version }}
           body: |
