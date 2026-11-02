@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -8,13 +10,14 @@ namespace QarttzVPN;
 
 /// <summary>
 /// Гибрид: xray (reality-туннель + локальный SOCKS) + sing-box (TUN -> SOCKS).
-/// Конфиг xray генерируется из выбранного профиля (vless-ссылки).
-/// IP сервера автоматически исключается из туннеля (иначе петля).
+/// Умеет автоподбор живого шлюза из списка профилей (сквозная проверка вход→выход→интернет)
+/// и автопереключение на резервный при сбое (вотчдог).
 /// </summary>
 public class SingBoxManager
 {
     public event Action<string>? Log;
-    public event Action<bool>? StateChanged;
+    public event Action<bool>? StateChanged;   // true=подключено, false=отключено
+    public event Action<string>? Status;       // текстовый статус для UI
 
     private Process? _xray;
     private Process? _singbox;
@@ -22,7 +25,18 @@ public class SingBoxManager
     private readonly string _logPath;
     private const int SocksPort = 24808;
 
+    // состояние автоподбора/вотчдога
+    private readonly object _gate = new();
+    private volatile bool _connecting;
+    private volatile bool _userStopped;
+    private List<VlessProfile> _candidates = new();
+    private bool _autoSwitch;
+    private VlessProfile? _active;
+    private int _probeFails;
+    private System.Threading.Timer? _watchdog;
+
     public bool IsRunning => _singbox is { HasExited: false } || _xray is { HasExited: false };
+    public string? ActiveName => _active?.Name;
 
     public SingBoxManager()
     {
@@ -53,14 +67,11 @@ public class SingBoxManager
         foreach (var raw in File.ReadAllLines(ExcludePath))
         {
             var line = raw;
-            // срезаем хвостовой/полный комментарий (всё после #)
             var h = line.IndexOf('#');
             if (h >= 0) line = line.Substring(0, h);
             line = line.Trim();
             if (line.Length == 0) continue;
-            // без префикса — считаем одиночным адресом
             if (!line.Contains('/')) line += line.Contains(':') ? "/128" : "/32";
-            // валидируем: кривая строка не должна ронять весь туннель
             if (System.Net.IPNetwork.TryParse(line, out _))
                 list.Add(line);
             else
@@ -80,7 +91,6 @@ public class SingBoxManager
             if (h >= 0) line = line.Substring(0, h);
             line = line.Trim();
             if (line.Length == 0) continue;
-            // нужно имя процесса (Discord.exe), а не путь
             if (line.Contains('\\') || line.Contains('/'))
             {
                 L($"Пропущено (нужно имя exe, не путь): '{raw.Trim()}'");
@@ -142,7 +152,6 @@ public class SingBoxManager
         }
         else
         {
-            // 2) пользовательские исключения по IP
             if (st.IpFilter)
             {
                 var excludes = ReadExcludes();
@@ -155,7 +164,6 @@ public class SingBoxManager
                 }
             }
 
-            // 3) исключения по приложениям (трафик этих exe идёт напрямую)
             if (st.AppsFilter)
             {
                 var apps = ReadApps();
@@ -190,7 +198,7 @@ public class SingBoxManager
         var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
         p.OutputDataReceived += (_, e) => Handle(label, e.Data);
         p.ErrorDataReceived  += (_, e) => Handle(label, e.Data);
-        p.Exited += (_, _) => { L($"{label} завершился (code {TryExit(p)})."); Stop(); };
+        p.Exited += (_, _) => { L($"{label} завершился (code {TryExit(p)})."); OnProcDied(label); };
         p.Start();
         p.BeginOutputReadLine();
         p.BeginErrorReadLine();
@@ -204,6 +212,7 @@ public class SingBoxManager
         var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < timeoutMs)
         {
+            if (_userStopped) return false;
             try
             {
                 using var c = new TcpClient();
@@ -216,43 +225,183 @@ public class SingBoxManager
         return false;
     }
 
-    public void Start(VlessProfile profile)
+    /// <summary>Быстрый TCP-коннект к самому шлюзу — отсеять заведомо мёртвые.</summary>
+    private bool PortAlive(string host, int port, int timeoutMs)
     {
-        if (IsRunning) { L("Start(): уже запущено."); return; }
         try
         {
-            if (!File.Exists(XrayPath)) throw new FileNotFoundException("Не найден core\\xray.exe.", XrayPath);
-            if (!File.Exists(SingBoxPath)) throw new FileNotFoundException("Не найден core\\sing-box.exe.", SingBoxPath);
-
-            BuildXrayConfig(profile);
-            _xray = StartProc(XrayPath, $"run -c \"{XrayConfigPath}\"", _baseDir, "xray");
-
-            L($"Ожидание SOCKS {SocksPort}…");
-            if (!WaitForPort(SocksPort, 8000))
-                throw new Exception($"xray не открыл порт {SocksPort}. Смотрите qvpn.log.");
-            L("SOCKS поднят.");
-
-            BuildRuntimeConfig(profile);
-            _singbox = StartProc(SingBoxPath, $"run -c \"{RuntimeConfigPath}\"",
-                                 Path.Combine(_baseDir, "core"), "sing-box");
-
-            Task.Run(() =>
-            {
-                Thread.Sleep(2500);
-                if (_xray is { HasExited: false } && _singbox is { HasExited: false })
-                {
-                    L("Туннель поднят.");
-                    StateChanged?.Invoke(true);
-                }
-            });
+            using var c = new TcpClient();
+            var ar = c.BeginConnect(host, port, null, null);
+            return ar.AsyncWaitHandle.WaitOne(timeoutMs) && c.Connected;
         }
-        catch (Exception ex)
+        catch { return false; }
+    }
+
+    /// <summary>Сквозная проверка: HTTP 204 через локальный SOCKS (весь путь вход→выход→интернет).</summary>
+    private bool Probe(int timeoutMs)
+    {
+        try
         {
-            L("START ERROR: " + ex.Message);
-            Stop();
-            throw;
+            var handler = new SocketsHttpHandler
+            {
+                Proxy = new WebProxy($"socks5://127.0.0.1:{SocksPort}"),
+                UseProxy = true,
+                ConnectTimeout = TimeSpan.FromMilliseconds(Math.Min(timeoutMs, 5000)),
+                AllowAutoRedirect = false,
+            };
+            using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
+            var r = http.GetAsync("http://www.gstatic.com/generate_204").GetAwaiter().GetResult();
+            return (int)r.StatusCode == 204 || r.IsSuccessStatusCode;
+        }
+        catch (Exception ex) { L("Probe: " + ex.Message); return false; }
+    }
+
+    // ---------- публичные точки входа ----------
+
+    /// <summary>Ручной выбор одного профиля (без переключения, но с переподключением при сбое).</summary>
+    public void Start(VlessProfile profile)
+    {
+        _userStopped = false;
+        BeginConnect(new List<VlessProfile> { profile }, autoSwitch: false, startIndex: 0);
+    }
+
+    /// <summary>Режим «Авто»: подобрать живой шлюз и переключаться при сбоях.</summary>
+    public void StartAuto(List<VlessProfile> profiles)
+    {
+        _userStopped = false;
+        BeginConnect(new List<VlessProfile>(profiles), autoSwitch: true, startIndex: 0);
+    }
+
+    private void BeginConnect(List<VlessProfile> cands, bool autoSwitch, int startIndex)
+    {
+        _connecting = true; // синхронно — чтобы вотчдог/Exited не вмешивались
+        Task.Run(() =>
+        {
+            lock (_gate)
+            {
+                try { ConnectLoop(cands, autoSwitch, startIndex); }
+                catch (Exception ex) { L("ConnectLoop ERROR: " + ex.Message); }
+                finally { _connecting = false; }
+            }
+        });
+    }
+
+    private void ConnectLoop(List<VlessProfile> cands, bool autoSwitch, int startIndex)
+    {
+        StopWatchdog();
+        KillProcs();
+
+        if (!File.Exists(XrayPath) || !File.Exists(SingBoxPath))
+        {
+            Status?.Invoke("Не найдены ядра (core\\xray.exe / sing-box.exe)");
+            StateChanged?.Invoke(false);
+            return;
+        }
+        if (cands.Count == 0)
+        {
+            Status?.Invoke("Нет профилей");
+            StateChanged?.Invoke(false);
+            return;
+        }
+
+        for (int i = 0; i < cands.Count; i++)
+        {
+            if (_userStopped) { KillProcs(); return; }
+            var p = cands[(startIndex + i) % cands.Count];
+
+            Status?.Invoke(cands.Count > 1 ? $"Проверка: {p.Name}…" : $"Подключение: {p.Name}…");
+            L($"Пробуем шлюз '{p.Name}' ({p.Host}:{p.Port}).");
+
+            // 1) быстрый отсев по порту
+            if (!PortAlive(p.Host, p.Port, 2500)) { L($"'{p.Name}': порт закрыт."); continue; }
+            if (_userStopped) { KillProcs(); return; }
+
+            // 2) поднять xray и проверить SOCKS
+            try { BuildXrayConfig(p); } catch (Exception ex) { L("BuildXrayConfig: " + ex.Message); continue; }
+            _xray = StartProc(XrayPath, $"run -c \"{XrayConfigPath}\"", _baseDir, "xray");
+            if (!WaitForPort(SocksPort, 8000)) { L($"'{p.Name}': SOCKS не поднялся."); KillProcs(); continue; }
+            if (_userStopped) { KillProcs(); return; }
+
+            // 3) сквозная проверка через туннель
+            if (!Probe(6000)) { L($"'{p.Name}': сквозная проверка не прошла."); KillProcs(); continue; }
+            if (_userStopped) { KillProcs(); return; }
+
+            // 4) поднять TUN
+            try { BuildRuntimeConfig(p); } catch (Exception ex) { L("BuildRuntimeConfig: " + ex.Message); KillProcs(); continue; }
+            _singbox = StartProc(SingBoxPath, $"run -c \"{RuntimeConfigPath}\"", Path.Combine(_baseDir, "core"), "sing-box");
+            Thread.Sleep(1500);
+            if (!(_xray is { HasExited: false } && _singbox is { HasExited: false })) { L($"'{p.Name}': процесс упал на старте."); KillProcs(); continue; }
+
+            // успех
+            _active = p;
+            _candidates = cands;
+            _autoSwitch = autoSwitch;
+            _probeFails = 0;
+            L($"Подключено через '{p.Name}'.");
+            StateChanged?.Invoke(true);
+            Status?.Invoke($"Подключено: {p.Name}");
+            StartWatchdog();
+            return;
+        }
+
+        // ничего не подошло
+        KillProcs();
+        _active = null;
+        StateChanged?.Invoke(false);
+        Status?.Invoke(autoSwitch ? "Нет доступных шлюзов" : "Шлюз недоступен");
+    }
+
+    // ---------- вотчдог ----------
+
+    private void StartWatchdog()
+    {
+        StopWatchdog();
+        _watchdog = new System.Threading.Timer(_ => WatchdogTick(), null, 25000, 25000);
+    }
+    private void StopWatchdog()
+    {
+        try { _watchdog?.Dispose(); } catch { }
+        _watchdog = null;
+    }
+
+    private void WatchdogTick()
+    {
+        if (_userStopped || _connecting) return;
+        if (!(_xray is { HasExited: false } && _singbox is { HasExited: false })) { HealthLost("процесс не запущен"); return; }
+        if (Probe(6000)) { _probeFails = 0; return; }
+        _probeFails++;
+        L($"Health-check не прошёл ({_probeFails}/2).");
+        if (_probeFails >= 2) { _probeFails = 0; HealthLost("нет ответа через туннель"); }
+    }
+
+    private void OnProcDied(string label)
+    {
+        if (_userStopped || _connecting) return; // намеренный kill / идёт переподключение
+        HealthLost($"процесс {label} упал");
+    }
+
+    private void HealthLost(string reason)
+    {
+        if (_userStopped || _connecting) return;
+        _connecting = true;           // сразу закрываем вход для повторных срабатываний
+        StopWatchdog();
+        L($"Связь потеряна: {reason}.");
+        var cands = _candidates;
+        var active = _active;
+        int idx = (active != null) ? cands.IndexOf(active) : -1;
+        if (_autoSwitch && cands.Count > 1)
+        {
+            Status?.Invoke("Переключение на резервный…");
+            BeginConnect(cands, true, (idx + 1) % cands.Count);
+        }
+        else
+        {
+            Status?.Invoke("Переподключение…");
+            BeginConnect(cands, _autoSwitch, idx < 0 ? 0 : idx);
         }
     }
+
+    // ---------- останов ----------
 
     private void Handle(string label, string? line)
     {
@@ -260,28 +409,24 @@ public class SingBoxManager
         L($"[{label}] {line}");
     }
 
-    private bool _stopping;
+    private void KillProcs()
+    {
+        foreach (var p in new[] { _singbox, _xray })
+        {
+            try { if (p is { HasExited: false }) { p.Kill(entireProcessTree: true); p.WaitForExit(3000); } }
+            catch { }
+        }
+        _singbox = null;
+        _xray = null;
+    }
+
     public void Stop()
     {
-        if (_stopping) return;
-        _stopping = true;
-        try
-        {
-            foreach (var p in new[] { _singbox, _xray })
-            {
-                try
-                {
-                    if (p is { HasExited: false }) { p.Kill(entireProcessTree: true); p.WaitForExit(3000); }
-                }
-                catch { }
-            }
-        }
-        finally
-        {
-            _singbox = null;
-            _xray = null;
-            StateChanged?.Invoke(false);
-            _stopping = false;
-        }
+        _userStopped = true;
+        StopWatchdog();
+        KillProcs();
+        _active = null;
+        StateChanged?.Invoke(false);
+        Status?.Invoke("Отключено");
     }
 }

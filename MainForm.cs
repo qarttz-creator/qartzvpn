@@ -98,6 +98,7 @@ public class MainForm : Form
         _tray.DoubleClick += (_, _) => ShowWindow();
 
         _mgr.StateChanged += OnState;
+        _mgr.Status += OnStatus;
         _mgr.Log += s => Debug.WriteLine(s);
 
         FormClosing += OnClosing;
@@ -110,6 +111,7 @@ public class MainForm : Form
         var keep = _combo.SelectedItem as string;
         _profiles.Clear();
         _combo.Items.Clear();
+        _combo.Items.Add("Авто (резерв)");   // индекс 0 — автоподбор живого шлюза
         if (File.Exists(ProfilesPath))
         {
             foreach (var raw in File.ReadAllLines(ProfilesPath))
@@ -125,10 +127,10 @@ public class MainForm : Form
                 catch { /* пропускаем битую строку */ }
             }
         }
-        if (_combo.Items.Count > 0)
+        var i = keep != null ? _combo.Items.IndexOf(keep) : -1;
+        _combo.SelectedIndex = i >= 0 ? i : 0;
+        if (_profiles.Count > 0)
         {
-            var i = keep != null ? _combo.Items.IndexOf(keep) : -1;
-            _combo.SelectedIndex = i >= 0 ? i : 0;
             if (!_connected) { _power.Enabled = true; _power.Cursor = Cursors.Hand; }
         }
         else
@@ -157,13 +159,16 @@ public class MainForm : Form
             }
             else
             {
-                if (_combo.SelectedIndex < 0 || _combo.SelectedIndex >= _profiles.Count)
+                if (_profiles.Count == 0)
                 {
                     MessageBox.Show("Сначала добавьте сервер в настройках.", "QartzVPN");
                     return;
                 }
                 SetUi(null);
-                _mgr.Start(_profiles[_combo.SelectedIndex]);
+                if (_combo.SelectedIndex <= 0)        // 0 = «Авто (резерв)»
+                    _mgr.StartAuto(_profiles);
+                else
+                    _mgr.Start(_profiles[_combo.SelectedIndex - 1]);
             }
         }
         catch (Exception ex)
@@ -176,6 +181,11 @@ public class MainForm : Form
     private void OnState(bool connected)
     {
         if (IsHandleCreated) BeginInvoke(() => SetUi(connected));
+    }
+
+    private void OnStatus(string s)
+    {
+        if (IsHandleCreated) BeginInvoke(() => { _status.Text = s; });
     }
 
     private void SetUi(bool? connected)
