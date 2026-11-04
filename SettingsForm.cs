@@ -156,7 +156,7 @@ public class SettingsForm : Form
     {
         var f = EditorForm("Серверы — по одной vless:// ссылке на строку");
         var tb = MakeEditor(f, File.Exists(ProfilesPath) ? File.ReadAllText(ProfilesPath) : "");
-        var hint = EditorHint(f, "Вставьте vless:// ссылку из 3x-ui (вкладка «Ссылки»). "
+        var hint = EditorHint(f, "Вставьте vless:// или hysteria2:// ссылку из 3x-ui (вкладка «Ссылки»). "
                               + "Имя — из части после # в конце. Комментарий — строкой с # в начале.");
         var save = EditorSave(f);
         save.Click += (_, _) =>
@@ -170,8 +170,8 @@ public class SettingsForm : Form
                 catch { bad.Add($"строка {n}: {Trunc(line)}"); }
             }
             if (bad.Count > 0) { Warn("Проверка профилей",
-                "Не сохранено — это не похоже на vless:// ссылку:\n\n" + string.Join("\n", bad) +
-                "\n\nФормат: vless://UUID@HOST:PORT?...#ИмяСервера"); return; }
+                "Не сохранено — это не похоже на vless:// или hysteria2:// ссылку:\n\n" + string.Join("\n", bad) +
+                "\n\nФормат: vless://UUID@HOST:PORT?...#Имя  или  hysteria2://ПАРОЛЬ@HOST:PORT?...#Имя"); return; }
             Write(ProfilesPath, tb.Text); f.Close();
         };
         f.Controls.AddRange(new Control[] { tb, hint, save });
