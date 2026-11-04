@@ -129,6 +129,25 @@ public class SingBoxManager
             throw new FileNotFoundException("Не найден config.template.json.", TemplatePath);
 
         var root = JsonNode.Parse(File.ReadAllText(TemplatePath))!.AsObject();
+
+        if (profile.Kind == ProfileKind.Hysteria2)
+        {
+            // sing-box ведёт hysteria2 сам: меняем socks-outbound "proxy" на hysteria2-outbound
+            // и добавляем mixed-inbound на локальный порт для сквозной проверки (Probe).
+            var outs = root["outbounds"]!.AsArray();
+            for (int i = outs.Count - 1; i >= 0; i--)
+                if ((string?)outs[i]?["tag"] == "proxy") outs.RemoveAt(i);
+            outs.Insert(0, profile.BuildSingboxOutbound());
+
+            root["inbounds"]!.AsArray().Add(new JsonObject
+            {
+                ["type"] = "mixed",
+                ["tag"] = "probe-in",
+                ["listen"] = "127.0.0.1",
+                ["listen_port"] = SocksPort,
+            });
+        }
+
         var rules = root["route"]!.AsObject()["rules"]!.AsArray();
 
         // 1) обход туннеля для самого сервера (обязательно)
@@ -310,27 +329,11 @@ public class SingBoxManager
             var p = cands[(startIndex + i) % cands.Count];
 
             Status?.Invoke(cands.Count > 1 ? $"Проверка: {p.Name}…" : $"Подключение: {p.Name}…");
-            L($"Пробуем шлюз '{p.Name}' ({p.Host}:{p.Port}).");
+            L($"Пробуем шлюз '{p.Name}' ({p.Host}:{p.Port}) [{p.Kind}].");
 
-            // 1) быстрый отсев по порту
-            if (!PortAlive(p.Host, p.Port, 2500)) { L($"'{p.Name}': порт закрыт."); continue; }
+            bool ok = p.Kind == ProfileKind.Hysteria2 ? TryConnectHysteria(p) : TryConnectVless(p);
             if (_userStopped) { KillProcs(); return; }
-
-            // 2) поднять xray и проверить SOCKS
-            try { BuildXrayConfig(p); } catch (Exception ex) { L("BuildXrayConfig: " + ex.Message); continue; }
-            _xray = StartProc(XrayPath, $"run -c \"{XrayConfigPath}\"", _baseDir, "xray");
-            if (!WaitForPort(SocksPort, 8000)) { L($"'{p.Name}': SOCKS не поднялся."); KillProcs(); continue; }
-            if (_userStopped) { KillProcs(); return; }
-
-            // 3) сквозная проверка через туннель
-            if (!Probe(6000)) { L($"'{p.Name}': сквозная проверка не прошла."); KillProcs(); continue; }
-            if (_userStopped) { KillProcs(); return; }
-
-            // 4) поднять TUN
-            try { BuildRuntimeConfig(p); } catch (Exception ex) { L("BuildRuntimeConfig: " + ex.Message); KillProcs(); continue; }
-            _singbox = StartProc(SingBoxPath, $"run -c \"{RuntimeConfigPath}\"", Path.Combine(_baseDir, "core"), "sing-box");
-            Thread.Sleep(1500);
-            if (!(_xray is { HasExited: false } && _singbox is { HasExited: false })) { L($"'{p.Name}': процесс упал на старте."); KillProcs(); continue; }
+            if (!ok) { KillProcs(); continue; }
 
             // успех
             _active = p;
@@ -351,6 +354,44 @@ public class SingBoxManager
         Status?.Invoke(autoSwitch ? "Нет доступных шлюзов" : "Шлюз недоступен");
     }
 
+    /// <summary>vless: xray (reality→SOCKS) + sing-box (TUN→SOCKS). true = поднялось полностью.</summary>
+    private bool TryConnectVless(VlessProfile p)
+    {
+        if (!PortAlive(p.Host, p.Port, 2500)) { L($"'{p.Name}': порт закрыт."); return false; }
+        if (_userStopped) return false;
+
+        try { BuildXrayConfig(p); } catch (Exception ex) { L("BuildXrayConfig: " + ex.Message); return false; }
+        _xray = StartProc(XrayPath, $"run -c \"{XrayConfigPath}\"", _baseDir, "xray");
+        if (!WaitForPort(SocksPort, 8000)) { L($"'{p.Name}': SOCKS не поднялся."); return false; }
+        if (_userStopped) return false;
+
+        if (!Probe(6000)) { L($"'{p.Name}': сквозная проверка не прошла."); return false; }
+        if (_userStopped) return false;
+
+        try { BuildRuntimeConfig(p); } catch (Exception ex) { L("BuildRuntimeConfig: " + ex.Message); return false; }
+        _singbox = StartProc(SingBoxPath, $"run -c \"{RuntimeConfigPath}\"", Path.Combine(_baseDir, "core"), "sing-box");
+        Thread.Sleep(1500);
+        if (!(_xray is { HasExited: false } && _singbox is { HasExited: false }))
+        { L($"'{p.Name}': процесс упал на старте."); return false; }
+        return true;
+    }
+
+    /// <summary>hysteria2: один sing-box (TUN + hysteria2-outbound + mixed для проверки). true = поднялось.</summary>
+    private bool TryConnectHysteria(VlessProfile p)
+    {
+        // hysteria2 — UDP, TCP-отсев по порту неинформативен, пропускаем его.
+        try { BuildRuntimeConfig(p); } catch (Exception ex) { L("BuildRuntimeConfig: " + ex.Message); return false; }
+        _singbox = StartProc(SingBoxPath, $"run -c \"{RuntimeConfigPath}\"", Path.Combine(_baseDir, "core"), "sing-box");
+        if (!WaitForPort(SocksPort, 8000)) { L($"'{p.Name}': локальный SOCKS (sing-box) не поднялся."); return false; }
+        if (_userStopped) return false;
+
+        if (!Probe(6000)) { L($"'{p.Name}': сквозная проверка не прошла."); return false; }
+        if (_userStopped) return false;
+
+        if (!(_singbox is { HasExited: false })) { L($"'{p.Name}': sing-box упал на старте."); return false; }
+        return true;
+    }
+
     // ---------- вотчдог ----------
 
     private void StartWatchdog()
@@ -367,7 +408,9 @@ public class SingBoxManager
     private void WatchdogTick()
     {
         if (_userStopped || _connecting) return;
-        if (!(_xray is { HasExited: false } && _singbox is { HasExited: false })) { HealthLost("процесс не запущен"); return; }
+        bool needXray = _active?.Kind != ProfileKind.Hysteria2;   // hysteria2 идёт без xray
+        bool procsOk = _singbox is { HasExited: false } && (!needXray || _xray is { HasExited: false });
+        if (!procsOk) { HealthLost("процесс не запущен"); return; }
         if (Probe(6000)) { _probeFails = 0; return; }
         _probeFails++;
         L($"Health-check не прошёл ({_probeFails}/2).");
