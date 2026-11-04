@@ -3,8 +3,11 @@ using System.Text.Json.Nodes;
 
 namespace QarttzVPN;
 
+public enum ProfileKind { Vless, Hysteria2 }
+
 /// <summary>
-/// Разбор vless:// ссылки и генерация xray-outbound.
+/// Разбор vless:// и hysteria2:// ссылок.
+/// vless → xray-outbound (reality и т.п.); hysteria2 → sing-box-outbound (ведётся напрямую через sing-box).
 /// Имя профиля берётся из #fragment ссылки.
 /// </summary>
 public class VlessProfile
@@ -13,18 +16,24 @@ public class VlessProfile
     public string Raw = "";
     public string Host = "";
     public int Port;
-    public string Uuid = "";
+    public string Uuid = "";          // для hysteria2 здесь лежит пароль авторизации (userinfo)
+    public ProfileKind Kind = ProfileKind.Vless;
     private Dictionary<string, string> _q = new(StringComparer.OrdinalIgnoreCase);
 
     public static VlessProfile Parse(string link)
     {
         link = link.Trim();
         var uri = new Uri(link);
-        if (!string.Equals(uri.Scheme, "vless", StringComparison.OrdinalIgnoreCase))
-            throw new FormatException("ссылка должна начинаться с vless://");
+        var kind = uri.Scheme.ToLowerInvariant() switch
+        {
+            "vless" => ProfileKind.Vless,
+            "hysteria2" or "hy2" => ProfileKind.Hysteria2,
+            _ => throw new FormatException("ссылка должна быть vless:// или hysteria2://"),
+        };
         var p = new VlessProfile
         {
             Raw = link,
+            Kind = kind,
             Uuid = Uri.UnescapeDataString(uri.UserInfo),
             Host = uri.Host,
             Port = uri.Port,
@@ -160,5 +169,34 @@ public class VlessProfile
             },
             ["streamSettings"] = stream
         };
+    }
+
+    /// <summary>sing-box hysteria2-outbound (ведётся напрямую через sing-box, без xray).</summary>
+    public JsonObject BuildSingboxOutbound()
+    {
+        var tls = new JsonObject { ["enabled"] = true };
+        var sni = Q("sni");
+        if (sni != "") tls["server_name"] = sni;
+        if (Q("insecure") == "1" || Q("allowInsecure") == "1") tls["insecure"] = true;
+
+        var o = new JsonObject
+        {
+            ["type"] = "hysteria2",
+            ["tag"] = "proxy",
+            ["server"] = Host,
+            ["server_port"] = Port,
+            ["password"] = Uuid,
+            ["tls"] = tls,
+        };
+
+        if (string.Equals(Q("obfs"), "salamander", StringComparison.OrdinalIgnoreCase))
+        {
+            o["obfs"] = new JsonObject
+            {
+                ["type"] = "salamander",
+                ["password"] = Q("obfs-password"),
+            };
+        }
+        return o;
     }
 }
