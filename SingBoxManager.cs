@@ -125,6 +125,15 @@ public class SingBoxManager
         }
 
         var st = Settings.Load();
+
+        // RU domains → direct (bypass VPN) so RU marketplaces/RKN see the real IP. .рф = xn--p1ai.
+        if (st.RuDirect)
+        {
+            var ru = new JsonArray { ".ru", ".su", "xn--p1ai" };
+            rules.Add(new JsonObject { ["domain_suffix"] = ru, ["action"] = "route", ["outbound"] = "direct" });
+            L("RU-домены (.ru/.рф/.su) идут напрямую.");
+        }
+
         if (st.Routing)
         {
             if (st.IpFilter)

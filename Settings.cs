@@ -12,6 +12,7 @@ public class Settings
     public bool Routing = true;
     public bool IpFilter = false;
     public bool AppsFilter = false;
+    public bool RuDirect = true;   // route RU domains (.ru/.рф/.su) straight out, bypassing the VPN
     public string SubUrl = "";   // subscription link from the admin (https://…/sub?token=…)
 
     private static string PathOf => System.IO.Path.Combine(AppContext.BaseDirectory, "settings.json");
@@ -28,6 +29,7 @@ public class Settings
                     Routing    = (bool?)o["routing"]    ?? true,
                     IpFilter   = (bool?)o["ipFilter"]   ?? false,
                     AppsFilter = (bool?)o["appsFilter"] ?? false,
+                    RuDirect   = (bool?)o["ruDirect"]   ?? true,
                     SubUrl     = (string?)o["subUrl"]   ?? "",
                 };
             }
@@ -43,6 +45,7 @@ public class Settings
             ["routing"]    = Routing,
             ["ipFilter"]   = IpFilter,
             ["appsFilter"] = AppsFilter,
+            ["ruDirect"]   = RuDirect,
             ["subUrl"]     = SubUrl,
         };
         try { File.WriteAllText(PathOf, o.ToJsonString(Json.Opts)); } catch { }
