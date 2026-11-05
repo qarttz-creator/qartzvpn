@@ -15,10 +15,20 @@ public class MainForm : Form
     private bool _autostartMode;
     private System.Windows.Forms.Timer? _poll;
 
+    /// <summary>Lets the settings dialog tear down the GUI's own tunnel before enabling the SYSTEM
+    /// autostart task, so the two don't fight over the TUN / port 24808.</summary>
+    public static Action? StopActiveTunnel;
+
     private readonly Image _imgIdle = Img("power_idle.png");
     private readonly Image _imgActive = Img("power_active.png");
 
     private static string ProfilesPath => Path.Combine(AppContext.BaseDirectory, "profiles.txt");
+
+    private static Icon? AppIcon()
+    {
+        try { return Icon.ExtractAssociatedIcon(Environment.ProcessPath!); }
+        catch { return null; }
+    }
 
     private static Image Img(string file)
     {
@@ -39,7 +49,8 @@ public class MainForm : Form
         BackColor = Color.FromArgb(10, 12, 24);
         BackgroundImage = Img("background.png");
         BackgroundImageLayout = ImageLayout.Stretch;
-        try { Icon = Icon.FromHandle(((Bitmap)_imgActive).GetHicon()); } catch { }
+        var appIcon = AppIcon();
+        if (appIcon != null) Icon = appIcon;
 
         // шестерёнка — настройки (справа вверху)
         _gear.Image = Img("gear.png");
@@ -71,7 +82,7 @@ public class MainForm : Form
         Controls.AddRange(new Control[] { _gear, _status, _power });
 
         _tray.Text = "QartzVPN";
-        _tray.Icon = SystemIcons.Shield;
+        _tray.Icon = appIcon ?? SystemIcons.Shield;
         _tray.Visible = true;
         var menu = new ContextMenuStrip();
         menu.Items.Add("Показать окно", null, (_, _) => ShowWindow());
@@ -85,6 +96,7 @@ public class MainForm : Form
         _mgr.StateChanged += OnState;
         _mgr.Status += OnStatus;
         _mgr.Log += s => Debug.WriteLine(s);
+        StopActiveTunnel = () => { try { _mgr.Stop(); } catch { } };
 
         FormClosing += OnClosing;
         Shown += OnShown;
@@ -301,6 +313,7 @@ public class MainForm : Form
         _autostartMode = AutoStart.IsEnabled();
         if (_autostartMode)
         {
+            try { _mgr.Stop(); } catch { } // connection is owned by the SYSTEM task — don't run our own
             _power.Enabled = false; _power.Cursor = Cursors.Default;
             _status.Text = "Автозапуск — проверка…"; _status.ForeColor = Color.Khaki;
             StartPoll();

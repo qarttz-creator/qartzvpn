@@ -21,6 +21,7 @@ DefaultGroupName=Qarttz VPN
 DisableProgramGroupPage=yes
 OutputDir=output
 OutputBaseFilename=QarttzVPN-Setup
+SetupIconFile=..\assets\app.ico
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
