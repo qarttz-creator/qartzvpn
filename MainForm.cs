@@ -12,6 +12,8 @@ public class MainForm : Form
     private readonly List<VlessProfile> _profiles = new();
     private bool _connected;
     private System.Threading.Timer? _heartbeat;
+    private bool _autostartMode;
+    private System.Windows.Forms.Timer? _poll;
 
     private readonly Image _imgIdle = Img("power_idle.png");
     private readonly Image _imgActive = Img("power_active.png");
@@ -98,6 +100,7 @@ public class MainForm : Form
 
         SilentSubRefresh();
         CheckForUpdate(manual: false);
+        RefreshAutostartMode();
     }
 
     private void RunActivation()
@@ -140,10 +143,17 @@ public class MainForm : Form
     {
         using (var f = new SettingsForm()) f.ShowDialog(this);
         LoadProfiles(); // подписка/фильтры могли измениться
+        RefreshAutostartMode();
     }
 
     private void Toggle()
     {
+        if (_autostartMode)
+        {
+            Info("VPN управляется автозапуском (поднимается с Windows).\n" +
+                 "Чтобы управлять вручную, отключите «Автозапуск» в настройках.");
+            return;
+        }
         try
         {
             if (_connected || _mgr.IsRunning)
@@ -284,6 +294,64 @@ public class MainForm : Form
 
     private static void Info(string msg) => MessageBox.Show(msg, "QartzVPN");
 
+    // ---------- режим автозапуска (подключением владеет системная задача) ----------
+
+    private void RefreshAutostartMode()
+    {
+        _autostartMode = AutoStart.IsEnabled();
+        if (_autostartMode)
+        {
+            _power.Enabled = false; _power.Cursor = Cursors.Default;
+            _status.Text = "Автозапуск — проверка…"; _status.ForeColor = Color.Khaki;
+            StartPoll();
+        }
+        else
+        {
+            StopPoll();
+            if (!_connected) { _power.Enabled = _profiles.Count > 0; _power.Cursor = _profiles.Count > 0 ? Cursors.Hand : Cursors.Default; }
+        }
+    }
+
+    private void StartPoll()
+    {
+        StopPoll();
+        _poll = new System.Windows.Forms.Timer { Interval = 5000 };
+        _poll.Tick += (_, _) => PollOnce();
+        _poll.Start();
+        PollOnce();
+    }
+
+    private void StopPoll()
+    {
+        try { _poll?.Stop(); _poll?.Dispose(); } catch { }
+        _poll = null;
+    }
+
+    private void PollOnce()
+    {
+        Task.Run(() =>
+        {
+            bool up = Net.TunnelUp();
+            if (!IsHandleCreated) return;
+            BeginInvoke(() =>
+            {
+                if (!_autostartMode) return;
+                if (up)
+                {
+                    _power.Image = _imgActive;
+                    _status.Text = "Подключено (автозапуск)";
+                    _status.ForeColor = Color.FromArgb(120, 230, 170);
+                }
+                else
+                {
+                    _power.Image = _imgIdle;
+                    _status.Text = "Поднимается (автозапуск)…";
+                    _status.ForeColor = Color.Khaki;
+                }
+            });
+        });
+    }
+
     // ---------- окно / выход ----------
 
     private void ShowWindow() { Show(); WindowState = FormWindowState.Normal; Activate(); }
@@ -295,6 +363,7 @@ public class MainForm : Form
 
     private void ExitApp()
     {
+        StopPoll();
         StopHeartbeat();
         _mgr.Stop();
         _tray.Visible = false;
