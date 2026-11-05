@@ -38,16 +38,19 @@ jobs:
             if (-not $v) { $v = '0.0.0-dev' }
             $tag = "v$v"
           }
-          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "tag=$tag"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Версия сборки: $v (тег $tag)"
+          $num = $v -replace '-.*$',''          # числовая часть для AssemblyVersion (0.0.0-dev -> 0.0.0)
+          if (-not $num) { $num = '0.0.0' }
+          "version=$v"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "numver=$num"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Версия сборки: $v (числовая $num, тег $tag)"
 
       - name: Сборка приложения
         shell: pwsh
         run: >
           dotnet publish QarttzVPN.csproj
           -c Release -r win-x64 --self-contained true
-          -p:PublishSingleFile=true -o publish
+          -p:PublishSingleFile=true -p:Version=${{ steps.ver.outputs.numver }} -o publish
 
       - name: Скачать ядра xray и sing-box
         shell: pwsh
@@ -83,6 +86,16 @@ jobs:
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.ver.outputs.version }} installer\QarttzVPN.iss
 
+      - name: Сгенерировать version.json
+        shell: pwsh
+        run: |
+          $meta = [ordered]@{
+            version = '${{ steps.ver.outputs.numver }}'
+            url     = 'https://github.com/qarttz-creator/qartzvpn/releases/download/desktop-latest/QarttzVPN-Setup.exe'
+          }
+          $meta | ConvertTo-Json | Out-File -Encoding utf8 installer\output\version.json
+          Get-Content installer\output\version.json
+
       - name: Выложить артефакт сборки
         uses: actions/upload-artifact@v4
         with:
@@ -112,3 +125,14 @@ jobs:
           body: |
             Установщик Qarttz VPN. Ядра xray и sing-box уже внутри (см. core/VERSIONS.txt).
             Запустить setup, затем кнопка «Подключить». Нужны права администратора.
+
+      - name: Обновить канал desktop-latest (для авто-обновления)
+        if: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-latest
+          name: QartzVPN Desktop (latest)
+          body: Авто-обновляемый канал. Клиент берёт отсюда version.json и установщик.
+          files: |
+            installer\output\QarttzVPN-Setup.exe
+            installer\output\version.json
