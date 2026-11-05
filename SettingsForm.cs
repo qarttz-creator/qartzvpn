@@ -129,6 +129,8 @@ public class SettingsForm : Form
     {
         if (_initAuto) return;
         Cursor = Cursors.WaitCursor;
+        // Before enabling: tear down the GUI's own tunnel so it doesn't fight the SYSTEM task.
+        if (_autostart.Checked) MainForm.StopActiveTunnel?.Invoke();
         bool ok = _autostart.Checked ? AutoStart.Enable() : AutoStart.Disable();
         Cursor = Cursors.Default;
         if (!ok)
