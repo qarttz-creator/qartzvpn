@@ -8,6 +8,7 @@ public class SettingsForm : Form
     private readonly CheckBox _ipF = new();
     private readonly CheckBox _appF = new();
     private readonly CheckBox _autostart = new();
+    private readonly CheckBox _ruDirect = new();
     private readonly Button _ipEdit = new();
     private readonly Button _appEdit = new();
     private bool _initAuto;
@@ -23,7 +24,7 @@ public class SettingsForm : Form
     public SettingsForm()
     {
         Text = "Настройки — QartzVPN";
-        ClientSize = new Size(440, 486);
+        ClientSize = new Size(440, 518);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -78,12 +79,18 @@ public class SettingsForm : Form
         _appEdit = FlatButton("Список приложений…", new Point(285, 258), 135);
         _appEdit.Click += (_, _) => EditApps();
 
+        // RU напрямую
+        _ruDirect.Text = "RU-сайты напрямую (.ru/.рф/.su в обход VPN)";
+        _ruDirect.ForeColor = Fg; _ruDirect.BackColor = Color.Transparent; _ruDirect.Font = new Font("Segoe UI", 9.5f);
+        _ruDirect.Location = new Point(18, 300); _ruDirect.AutoSize = true;
+        _ruDirect.Checked = _st.RuDirect;
+
         // --- Автозапуск ---
-        var hAuto = Header("Автозапуск", 314);
+        var hAuto = Header("Автозапуск", 344);
         _autostart.Text = "Запускать с Windows и подключаться (для всех)";
         _autostart.ForeColor = Fg; _autostart.BackColor = Color.Transparent;
         _autostart.Font = new Font("Segoe UI", 9.5f);
-        _autostart.Location = new Point(18, 340); _autostart.AutoSize = true;
+        _autostart.Location = new Point(18, 370); _autostart.AutoSize = true;
         _autostart.Checked = AutoStart.IsEnabled();
         _autostart.CheckedChanged += (_, _) => ToggleAutostart();
         var autoSub = new Label
@@ -91,26 +98,26 @@ public class SettingsForm : Form
             Text = "Поднимается при старте Windows под системной учётной записью — "
                  + "работает и без прав администратора у пользователя. Нужны права админа для включения.",
             ForeColor = Color.Gray, BackColor = Color.Transparent,
-            Location = new Point(40, 362), Size = new Size(385, 44), Font = new Font("Segoe UI", 8)
+            Location = new Point(40, 392), Size = new Size(385, 44), Font = new Font("Segoe UI", 8)
         };
 
         var applyHint = new Label
         {
             Text = "Изменения применяются при следующем подключении.",
             ForeColor = Color.Gray, BackColor = Color.Transparent,
-            Location = new Point(20, 412), Size = new Size(400, 20), Font = new Font("Segoe UI", 8)
+            Location = new Point(20, 444), Size = new Size(400, 20), Font = new Font("Segoe UI", 8)
         };
 
-        var save = FlatButton("Сохранить", new Point(228, 440), 95);
+        var save = FlatButton("Сохранить", new Point(228, 472), 95);
         save.BackColor = Color.FromArgb(0, 120, 215); save.ForeColor = Color.White;
         save.Click += (_, _) => { SaveState(); Close(); };
-        var cancel = FlatButton("Отмена", new Point(333, 440), 85);
+        var cancel = FlatButton("Отмена", new Point(333, 472), 85);
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[] {
             hProf, pInfo, pEdit, pUpd, hRoute, _routing, rHint,
             _ipF, ipSub, _ipEdit, _appF, appSub, _appEdit,
-            hAuto, _autostart, autoSub, applyHint, save, cancel
+            _ruDirect, hAuto, _autostart, autoSub, applyHint, save, cancel
         });
 
         Sync();
@@ -151,6 +158,7 @@ public class SettingsForm : Form
         _st.Routing = _routing.Checked;
         _st.IpFilter = _ipF.Checked;
         _st.AppsFilter = _appF.Checked;
+        _st.RuDirect = _ruDirect.Checked;
         _st.Save();
     }
 
