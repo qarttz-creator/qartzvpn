@@ -7,8 +7,10 @@ public class SettingsForm : Form
     private readonly CheckBox _routing = new();
     private readonly CheckBox _ipF = new();
     private readonly CheckBox _appF = new();
+    private readonly CheckBox _autostart = new();
     private readonly Button _ipEdit = new();
     private readonly Button _appEdit = new();
+    private bool _initAuto;
 
     private static string ProfilesPath => Path.Combine(AppContext.BaseDirectory, "profiles.txt");
     private static string ExcludePath  => Path.Combine(AppContext.BaseDirectory, "exclude.txt");
@@ -21,7 +23,7 @@ public class SettingsForm : Form
     public SettingsForm()
     {
         Text = "Настройки — QartzVPN";
-        ClientSize = new Size(440, 400);
+        ClientSize = new Size(440, 486);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -76,22 +78,39 @@ public class SettingsForm : Form
         _appEdit = FlatButton("Список приложений…", new Point(285, 258), 135);
         _appEdit.Click += (_, _) => EditApps();
 
+        // --- Автозапуск ---
+        var hAuto = Header("Автозапуск", 314);
+        _autostart.Text = "Запускать с Windows и подключаться (для всех)";
+        _autostart.ForeColor = Fg; _autostart.BackColor = Color.Transparent;
+        _autostart.Font = new Font("Segoe UI", 9.5f);
+        _autostart.Location = new Point(18, 340); _autostart.AutoSize = true;
+        _autostart.Checked = AutoStart.IsEnabled();
+        _autostart.CheckedChanged += (_, _) => ToggleAutostart();
+        var autoSub = new Label
+        {
+            Text = "Поднимается при старте Windows под системной учётной записью — "
+                 + "работает и без прав администратора у пользователя. Нужны права админа для включения.",
+            ForeColor = Color.Gray, BackColor = Color.Transparent,
+            Location = new Point(40, 362), Size = new Size(385, 44), Font = new Font("Segoe UI", 8)
+        };
+
         var applyHint = new Label
         {
             Text = "Изменения применяются при следующем подключении.",
             ForeColor = Color.Gray, BackColor = Color.Transparent,
-            Location = new Point(20, 312), Size = new Size(400, 20), Font = new Font("Segoe UI", 8)
+            Location = new Point(20, 412), Size = new Size(400, 20), Font = new Font("Segoe UI", 8)
         };
 
-        var save = FlatButton("Сохранить", new Point(228, 344), 95);
+        var save = FlatButton("Сохранить", new Point(228, 440), 95);
         save.BackColor = Color.FromArgb(0, 120, 215); save.ForeColor = Color.White;
         save.Click += (_, _) => { SaveState(); Close(); };
-        var cancel = FlatButton("Отмена", new Point(333, 344), 85);
+        var cancel = FlatButton("Отмена", new Point(333, 440), 85);
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[] {
             hProf, pInfo, pEdit, pUpd, hRoute, _routing, rHint,
-            _ipF, ipSub, _ipEdit, _appF, appSub, _appEdit, applyHint, save, cancel
+            _ipF, ipSub, _ipEdit, _appF, appSub, _appEdit,
+            hAuto, _autostart, autoSub, applyHint, save, cancel
         });
 
         Sync();
@@ -104,6 +123,25 @@ public class SettingsForm : Form
         _ipEdit.Enabled = r; _appEdit.Enabled = r;
         _ipF.ForeColor = r ? Fg : Color.Gray;
         _appF.ForeColor = r ? Fg : Color.Gray;
+    }
+
+    private void ToggleAutostart()
+    {
+        if (_initAuto) return;
+        Cursor = Cursors.WaitCursor;
+        bool ok = _autostart.Checked ? AutoStart.Enable() : AutoStart.Disable();
+        Cursor = Cursors.Default;
+        if (!ok)
+        {
+            MessageBox.Show("Не удалось изменить автозапуск. Нужны права администратора.", "QartzVPN");
+            _initAuto = true; _autostart.Checked = AutoStart.IsEnabled(); _initAuto = false;
+            return;
+        }
+        if (_autostart.Checked)
+            MessageBox.Show(
+                "Автозапуск включён. VPN будет подниматься при старте Windows для всех пользователей.\n\n" +
+                "Серверы берутся из активированной подписки — убедитесь, что приложение активировано.",
+                "QartzVPN");
     }
 
     private void SaveState()
