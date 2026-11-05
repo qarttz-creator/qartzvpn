@@ -27,17 +27,19 @@ public class SettingsForm : Form
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Bg;
 
-        // --- Профили ---
-        var hProf = Header("Серверы", 16);
+        // --- Подписка / обновление ---
+        var hProf = Header("Подписка", 16);
         var pInfo = new Label
         {
-            Text = "Список серверов (vless-ссылки). Выбор сервера — в главном окне.",
+            Text = "Серверы приходят по ссылке активации от администратора. Выбор шлюза автоматический.",
             ForeColor = Color.Gray, BackColor = Color.Transparent,
-            Location = new Point(20, 40), AutoSize = false, Size = new Size(300, 34),
+            Location = new Point(20, 40), AutoSize = false, Size = new Size(400, 34),
             Font = new Font("Segoe UI", 8)
         };
-        var pEdit = FlatButton("Изменить список серверов…", new Point(20, 74), 200);
-        pEdit.Click += (_, _) => EditProfiles();
+        var pEdit = FlatButton("Сменить подписку…", new Point(20, 74), 195);
+        pEdit.Click += (_, _) => ChangeSub();
+        var pUpd = FlatButton("Проверить обновление", new Point(223, 74), 197);
+        pUpd.Click += (_, _) => CheckUpdate();
 
         // --- Маршрутизация ---
         var hRoute = Header("Маршрутизация", 122);
@@ -88,7 +90,7 @@ public class SettingsForm : Form
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[] {
-            hProf, pInfo, pEdit, hRoute, _routing, rHint,
+            hProf, pInfo, pEdit, pUpd, hRoute, _routing, rHint,
             _ipF, ipSub, _ipEdit, _appF, appSub, _appEdit, applyHint, save, cancel
         });
 
@@ -152,30 +154,31 @@ public class SettingsForm : Form
         return tb;
     }
 
-    private void EditProfiles()
+    private void ChangeSub()
     {
-        var f = EditorForm("Серверы — по одной vless:// ссылке на строку");
-        var tb = MakeEditor(f, File.Exists(ProfilesPath) ? File.ReadAllText(ProfilesPath) : "");
-        var hint = EditorHint(f, "Вставьте vless:// или hysteria2:// ссылку из 3x-ui (вкладка «Ссылки»). "
-                              + "Имя — из части после # в конце. Комментарий — строкой с # в начале.");
-        var save = EditorSave(f);
-        save.Click += (_, _) =>
-        {
-            var bad = new List<string>(); int n = 0;
-            foreach (var raw in tb.Lines)
-            {
-                n++; var line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith("#")) continue;
-                try { VlessProfile.Parse(line); }
-                catch { bad.Add($"строка {n}: {Trunc(line)}"); }
-            }
-            if (bad.Count > 0) { Warn("Проверка профилей",
-                "Не сохранено — это не похоже на vless:// или hysteria2:// ссылку:\n\n" + string.Join("\n", bad) +
-                "\n\nФормат: vless://UUID@HOST:PORT?...#Имя  или  hysteria2://ПАРОЛЬ@HOST:PORT?...#Имя"); return; }
-            Write(ProfilesPath, tb.Text); f.Close();
-        };
-        f.Controls.AddRange(new Control[] { tb, hint, save });
+        using var f = new ActivationForm();
         f.ShowDialog(this);
+    }
+
+    private void CheckUpdate()
+    {
+        Cursor = Cursors.WaitCursor;
+        var r = Updater.Fetch();
+        Cursor = Cursors.Default;
+        if (r == null) { MessageBox.Show("Не удалось проверить обновление.", "QartzVPN"); return; }
+        if (!Updater.IsNewer(r))
+        { MessageBox.Show($"Установлена последняя версия ({Updater.CurrentVersion}).", "QartzVPN"); return; }
+
+        var ans = MessageBox.Show(
+            $"Доступна новая версия: {r.Version}\nТекущая: {Updater.CurrentVersion}\n\nОбновить сейчас?",
+            "Обновление QartzVPN", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+        if (ans != DialogResult.Yes) return;
+
+        Cursor = Cursors.WaitCursor;
+        var path = Updater.Download(r);
+        Cursor = Cursors.Default;
+        if (path == null) { MessageBox.Show("Не удалось скачать обновление.", "QartzVPN"); return; }
+        Updater.RunInstallerAndExit(path);
     }
 
     private void EditExcludes()
