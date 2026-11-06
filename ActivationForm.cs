@@ -16,33 +16,33 @@ public class ActivationForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        BackColor = Color.FromArgb(22, 24, 36);
+        BackColor = Color.FromArgb(241, 241, 237);
 
         var title = new Label
         {
             Text = "Вставьте ссылку активации",
-            ForeColor = Color.FromArgb(150, 180, 255), BackColor = Color.Transparent,
+            ForeColor = Color.FromArgb(30, 110, 114), BackColor = Color.Transparent,
             Font = new Font("Segoe UI", 12, FontStyle.Bold),
             Location = new Point(20, 18), AutoSize = true,
         };
         var hint = new Label
         {
             Text = "Ссылку выдаёт администратор. После активации серверы подтянутся автоматически.",
-            ForeColor = Color.Gray, BackColor = Color.Transparent,
+            ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
             Location = new Point(20, 50), Size = new Size(420, 34), Font = new Font("Segoe UI", 8),
         };
 
         _input.Location = new Point(20, 92); _input.Width = 420; _input.Font = new Font("Segoe UI", 10);
-        _input.BackColor = Color.FromArgb(28, 30, 44); _input.ForeColor = Color.White;
+        _input.BackColor = Color.FromArgb(255, 255, 255); _input.ForeColor = Color.FromArgb(24, 25, 27);
         _input.BorderStyle = BorderStyle.FixedSingle;
         _input.Text = Settings.Load().SubUrl;
 
         _btn.Text = "Активировать"; _btn.Location = new Point(20, 132); _btn.Size = new Size(150, 34);
-        _btn.FlatStyle = FlatStyle.Flat; _btn.BackColor = Color.FromArgb(0, 120, 215); _btn.ForeColor = Color.White;
+        _btn.FlatStyle = FlatStyle.Flat; _btn.BackColor = Color.FromArgb(30, 110, 114); _btn.ForeColor = Color.White;
         _btn.Click += (_, _) => Activate();
 
         _status.Location = new Point(20, 180); _status.Size = new Size(420, 34);
-        _status.ForeColor = Color.Gainsboro; _status.BackColor = Color.Transparent;
+        _status.ForeColor = Color.FromArgb(109, 112, 118); _status.BackColor = Color.Transparent;
         _status.Font = new Font("Segoe UI", 8);
 
         Controls.AddRange(new Control[] { title, hint, _input, _btn, _status });
