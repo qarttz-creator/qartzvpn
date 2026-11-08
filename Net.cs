@@ -45,6 +45,19 @@ static class Net
         catch { return null; }
     }
 
+    /// <summary>Скачать бинарь через локальный SOCKS (= через туннель). null при ошибке.</summary>
+    public static byte[]? DownloadViaTunnel(string url, int timeoutMs = 300000)
+    {
+        try
+        {
+            using var http = new HttpClient(SocksHandler(TimeSpan.FromSeconds(10))) { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
+            var r = http.GetAsync(url).GetAwaiter().GetResult();
+            if (!r.IsSuccessStatusCode) return null;
+            return r.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        }
+        catch { return null; }
+    }
+
     /// <summary>POST JSON через локальный SOCKS (= через туннель). Best-effort.</summary>
     public static void PostViaTunnel(string url, string json, int timeoutMs = 6000)
     {

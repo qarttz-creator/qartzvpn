@@ -28,15 +28,29 @@ static class Updater
 
     public static Remote? Fetch()
     {
+        // GitHub (где лежит version.json) на враждебной сети часто закрыт напрямую — та же беда, что
+        // и с подпиской. Если туннель поднят, читаем ПО ТУННЕЛЮ (через выход), иначе — напрямую.
+        string? text = null;
+        if (Net.TunnelUp()) text = Net.FetchViaTunnel(VersionUrl, 12000);
+        if (string.IsNullOrWhiteSpace(text)) text = FetchDirect(VersionUrl);
+        if (string.IsNullOrWhiteSpace(text)) return null;
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            var text = http.GetStringAsync(VersionUrl).GetAwaiter().GetResult();
             var o = JsonNode.Parse(text)!.AsObject();
             var ver = (string?)o["version"] ?? "";
             var url = (string?)o["url"] ?? "";
             if (ver.Length == 0 || url.Length == 0) return null;
             return new Remote(ver, url);
+        }
+        catch { return null; }
+    }
+
+    private static string? FetchDirect(string url)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            return http.GetStringAsync(url).GetAwaiter().GetResult();
         }
         catch { return null; }
     }
@@ -60,11 +74,24 @@ static class Updater
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-            var bytes = http.GetByteArrayAsync(r.Url).GetAwaiter().GetResult();
+            // Как и манифест — качаем установщик по туннелю, если он поднят, иначе напрямую.
+            byte[]? bytes = null;
+            if (Net.TunnelUp()) bytes = Net.DownloadViaTunnel(r.Url);
+            if (bytes == null) bytes = DownloadDirect(r.Url);
+            if (bytes == null) return null;
             var path = Path.Combine(Path.GetTempPath(), "QarttzVPN-Setup.exe");
             File.WriteAllBytes(path, bytes);
             return path;
+        }
+        catch { return null; }
+    }
+
+    private static byte[]? DownloadDirect(string url)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            return http.GetByteArrayAsync(url).GetAwaiter().GetResult();
         }
         catch { return null; }
     }
