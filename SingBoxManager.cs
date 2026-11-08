@@ -39,8 +39,23 @@ public class SingBoxManager
     private System.Threading.Timer? _watchdog;
     private System.Threading.Timer? _retry;
 
+    // телеметрия доступности маршрутов (для /hb → панель)
+    private readonly object _healthGate = new();
+    private readonly Dictionary<string, bool> _routeHealth = new();
+
     public bool IsRunning => _main is { HasExited: false } || _provider is { HasExited: false };
     public string? ActiveName => _active?.Name;
+
+    /// <summary>Снимок health кандидатов: имя шлюза → поднялся ли при последней проверке.</summary>
+    public List<(string name, bool up)> RouteHealth()
+    {
+        lock (_healthGate) return _routeHealth.Select(kv => (kv.Key, kv.Value)).ToList();
+    }
+
+    private void SetHealth(string name, bool up)
+    {
+        lock (_healthGate) _routeHealth[name] = up;
+    }
 
     public SingBoxManager()
     {
@@ -351,11 +366,12 @@ public class SingBoxManager
             StopProvider();
             bool up = p.Kind == ProfileKind.Hysteria2 ? StartHyProvider(p) : StartXrayProvider(p);
             if (_userStopped) { Teardown(); return; }
-            if (!up) { StopProvider(); continue; }
+            if (!up) { SetHealth(p.Name, false); StopProvider(); continue; }
 
-            if (!ProbeOk(8000, 2)) { L($"'{p.Name}': сквозная проверка не прошла."); StopProvider(); continue; }
+            if (!ProbeOk(8000, 2)) { SetHealth(p.Name, false); L($"'{p.Name}': сквозная проверка не прошла."); StopProvider(); continue; }
             if (_userStopped) { Teardown(); return; }
 
+            SetHealth(p.Name, true);
             _active = p;
             _probeFails = 0;
             L($"Подключено через '{p.Name}'.");
@@ -473,6 +489,7 @@ public class SingBoxManager
         StopProvider();
         StopMain();
         _active = null;
+        lock (_healthGate) _routeHealth.Clear();
         StateChanged?.Invoke(false);
         Status?.Invoke("Отключено");
     }

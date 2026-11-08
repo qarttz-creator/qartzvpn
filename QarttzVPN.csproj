@@ -44,6 +44,8 @@
     <EmbeddedResource Include="assets\power_idle.png" />
     <EmbeddedResource Include="assets\power_active.png" />
     <EmbeddedResource Include="assets\gear.png" />
+    <!-- запекаемые маршруты активации (bootstrap-туннель на заблокированной сети) -->
+    <EmbeddedResource Include="assets\activation_seed.txt" />
   </ItemGroup>
 
 </Project>

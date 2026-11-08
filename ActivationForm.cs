@@ -61,11 +61,22 @@ public class ActivationForm : Form
             int n = Subscription.Refresh(url, out var err);
             BeginInvoke(() =>
             {
-                if (n < 0) { _status.Text = "Не удалось: " + err; _btn.Enabled = true; return; }
-                if (n == 0) { _status.Text = "Ссылка открылась, но серверов нет"; _btn.Enabled = true; return; }
-                var st = Settings.Load(); st.SubUrl = url; st.Save();
-                Activated = true;
-                Close();
+                if (n > 0)
+                {
+                    var st = Settings.Load(); st.SubUrl = url; st.Save();
+                    Activated = true; Close(); return;
+                }
+                // Прямой доступ к /sub закрыт (заблокированная сеть) — но если есть запечённые маршруты
+                // активации, всё равно активируем: подключимся на них, а своя подписка подтянется по
+                // туннелю после подключения. Это и есть «подписка там, где нет прямого доступа».
+                if (ActivationSeed.HasAny())
+                {
+                    var st = Settings.Load(); st.SubUrl = url; st.Save();
+                    _status.Text = "Подписка напрямую недоступна — активируем через туннель…";
+                    Activated = true; Close(); return;
+                }
+                _status.Text = n < 0 ? "Не удалось: " + err : "Ссылка открылась, но серверов нет";
+                _btn.Enabled = true;
             });
         });
     }

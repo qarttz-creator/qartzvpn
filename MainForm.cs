@@ -14,6 +14,8 @@ public class MainForm : Form
     private System.Threading.Timer? _heartbeat;
     private bool _autostartMode;
     private System.Windows.Forms.Timer? _poll;
+    private bool _bootstrap;     // текущие _profiles — это маршруты активации (своих ещё нет)
+    private volatile bool _subPulled;  // подписку по туннелю тянем один раз за подключение
 
     /// <summary>Lets the settings dialog tear down the GUI's own tunnel before enabling the SYSTEM
     /// autostart task, so the two don't fight over the TUN / port 24808.</summary>
@@ -125,6 +127,9 @@ public class MainForm : Form
     private void LoadProfiles()
     {
         _profiles.Clear();
+        _bootstrap = false;
+
+        // 1) свои серверы (подписка/вручную)
         if (File.Exists(ProfilesPath))
         {
             foreach (var raw in File.ReadAllLines(ProfilesPath))
@@ -136,16 +141,34 @@ public class MainForm : Form
             }
         }
 
+        // 2) своих ещё нет, но задана подписка → поднимаемся на маршрутах активации (bootstrap);
+        //    свои серверы подтянутся по туннелю после подключения и заменят этот набор.
+        if (_profiles.Count == 0 && !string.IsNullOrWhiteSpace(Settings.Load().SubUrl) && ActivationSeed.HasAny())
+        {
+            foreach (var raw in ActivationSeed.Routes().Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0) continue;
+                try { _profiles.Add(VlessProfile.Parse(line)); } catch { }
+            }
+            _bootstrap = _profiles.Count > 0;
+        }
+
         if (_connected) return;
         if (_profiles.Count > 0)
         {
             _power.Enabled = true; _power.Cursor = Cursors.Hand;
-            if (_status.Text.StartsWith("Нет ") || _status.Text.StartsWith("Активируйте"))
-            { _status.Text = "Отключено"; _status.ForeColor = Color.Gainsboro; }
+            if (_status.Text.StartsWith("Нет ") || _status.Text.StartsWith("Активируйте") || _status.Text.StartsWith("Ожидание"))
+            {
+                _status.Text = _bootstrap ? "Активация — нажмите подключить" : "Отключено";
+                _status.ForeColor = _bootstrap ? Color.Khaki : Color.Gainsboro;
+            }
         }
         else
         {
-            _status.Text = "Активируйте приложение (шестерёнка)";
+            _status.Text = string.IsNullOrWhiteSpace(Settings.Load().SubUrl)
+                ? "Активируйте приложение (шестерёнка)"
+                : "Ожидание активации — проверьте сеть";
             _status.ForeColor = Color.Khaki;
             _power.Enabled = false; _power.Cursor = Cursors.Default;
         }
@@ -181,6 +204,7 @@ public class MainForm : Form
                     if (_profiles.Count == 0) return;
                 }
                 SetUi(null);
+                _subPulled = false;          // новая сессия — подписку по туннелю тянем заново
                 _mgr.StartAuto(_profiles);   // всегда авто: перебор всех шлюзов + failover
             }
         }
@@ -223,6 +247,7 @@ public class MainForm : Form
             _status.ForeColor = Color.FromArgb(120, 230, 170);
             _tray.Text = "QartzVPN — подключено";
             StartHeartbeat();
+            if (!_subPulled) { _subPulled = true; PullSubOverTunnel(); }
         }
         else
         {
@@ -263,8 +288,42 @@ public class MainForm : Form
     private void SendHeartbeat()
     {
         var st = Settings.Load();
-        Heartbeat.Send(st.ControlBase(), st.Token(), Updater.CurrentVersion, _mgr.ActiveName ?? "");
+        Heartbeat.Send(st.ControlBase(), st.Token(), Updater.CurrentVersion, _mgr.ActiveName ?? "", _mgr.RouteHealth());
     }
+
+    /// <summary>
+    /// Туннель встал — тянем СВОЮ подписку ПО ТУННЕЛЮ (не по открытому интернету) и, если это не те
+    /// маршруты, на которых поднялись (bootstrap через активацию), переключаемся на свои. Так общий
+    /// профиль активации перестаёт возить трафик. Один раз за подключение.
+    /// </summary>
+    private void PullSubOverTunnel()
+    {
+        var st = Settings.Load();
+        if (string.IsNullOrWhiteSpace(st.SubUrl)) return;
+        Task.Run(() =>
+        {
+            var before = SafeRead(ProfilesPath);
+            int n = Subscription.RefreshViaTunnel(st.SubUrl, out _);
+            var after = SafeRead(ProfilesPath);
+
+            // самообновление профиля активации (bootstrap-маршрутов) по туннелю
+            var act = Net.FetchViaTunnel(st.ControlBase() + "/activation");
+            if (!string.IsNullOrWhiteSpace(act)) ActivationSeed.SaveCache(act);
+
+            if (n > 0 && after.Trim() != before.Trim() && IsHandleCreated)
+            {
+                BeginInvoke(() =>
+                {
+                    LoadProfiles();   // профили обновились (свои), _bootstrap снимется
+                    if (_connected && !_autostartMode && _profiles.Count > 0)
+                        _mgr.StartAuto(_profiles);   // переключаемся с активации на свои маршруты
+                });
+            }
+        });
+    }
+
+    private static string SafeRead(string path)
+    { try { return File.Exists(path) ? File.ReadAllText(path) : ""; } catch { return ""; } }
 
     // ---------- обновление ----------
 
