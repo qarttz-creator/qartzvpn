@@ -45,7 +45,7 @@ static class Program
             if (pulled || string.IsNullOrWhiteSpace(st.SubUrl) || !Net.TunnelUp()) return;
             pulled = true;
             var before = SafeReadProfiles();
-            int n = Subscription.RefreshViaTunnel(st.SubUrl, out _);
+            int n = Subscription.RefreshViaTunnel(st.SubUrl, out string _err);
             var act = Net.FetchViaTunnel(st.ControlBase() + "/activation");
             if (!string.IsNullOrWhiteSpace(act)) ActivationSeed.SaveCache(act);
             if (n > 0 && SafeReadProfiles().Trim() != before.Trim())
