@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 namespace QarttzVPN;
 
-public enum ProfileKind { Vless, Hysteria2 }
+public enum ProfileKind { Vless, Hysteria2, Awg }
 
 /// <summary>
 /// Разбор vless:// и hysteria2:// ссылок.
@@ -18,11 +18,17 @@ public class VlessProfile
     public int Port;
     public string Uuid = "";          // для hysteria2 здесь лежит пароль авторизации (userinfo)
     public ProfileKind Kind = ProfileKind.Vless;
+    public JsonObject? AwgEndpoint;   // для Awg: готовый sing-box `awg` endpoint
     private Dictionary<string, string> _q = new(StringComparer.OrdinalIgnoreCase);
 
     public static VlessProfile Parse(string link)
     {
         link = link.Trim();
+        // AmneziaWG: ссылка vpn:// / awg:// (base64 INI) или INI-блок, вставленный напрямую.
+        var ini = AwgConfig.FromLink(link);
+        if (ini == null && AwgConfig.LooksLikeIni(link)) ini = link;
+        if (ini != null) return FromAwgIni(ini, link);
+
         var uri = new Uri(link);
         var kind = uri.Scheme.ToLowerInvariant() switch
         {
@@ -45,6 +51,23 @@ public class VlessProfile
         if (string.IsNullOrEmpty(p.Uuid) || string.IsNullOrEmpty(p.Host) || p.Port <= 0)
             throw new FormatException("в ссылке нет uuid/host/port");
         return p;
+    }
+
+    /// <summary>AmneziaWG INI → профиль с готовым sing-box `awg` endpoint (ведётся напрямую через sing-box).</summary>
+    private static VlessProfile FromAwgIni(string ini, string raw)
+    {
+        var ep = AwgConfig.ParseIni(ini, "awg")
+            ?? throw new FormatException("не удалось разобрать конфиг AmneziaWG");
+        var peer = (ep["peers"] as JsonArray) is { Count: > 0 } arr ? arr[0]!.AsObject() : null;
+        return new VlessProfile
+        {
+            Raw = raw,
+            Kind = ProfileKind.Awg,
+            Host = (string?)peer?["address"] ?? "",
+            Port = peer?["port"] is JsonNode pn ? (int)pn : 0,
+            Name = "AmneziaWG",
+            AwgEndpoint = ep,
+        };
     }
 
     private static Dictionary<string, string> ParseQuery(string query)

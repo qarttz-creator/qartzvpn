@@ -79,6 +79,7 @@ public class SingBoxManager
     private string XrayConfigPath  => Path.Combine(_baseDir, "xray-runtime.json");
     private string MainConfigPath  => Path.Combine(_baseDir, "main-config.json");
     private string HyConfigPath    => Path.Combine(_baseDir, "hy-provider.json");
+    private string AwgConfigPath   => Path.Combine(_baseDir, "awg-provider.json");
 
     private List<string> ReadExcludes()
     {
@@ -216,6 +217,29 @@ public class SingBoxManager
         };
         File.WriteAllText(HyConfigPath, cfg.ToJsonString(Json.Opts));
         L($"hysteria-провайдер '{profile.Name}' ({profile.Host}:{profile.Port}).");
+    }
+
+    /// <summary>AmneziaWG provider: a second sing-box with a local socks on 24808 (no TUN) whose
+    /// `awg` endpoint tunnels everything to the gateway. Needs the AWG-capable sing-box.exe built
+    /// from the amnezia-box fork with -tags with_awg (the CI build does exactly this).</summary>
+    private void BuildAwgProviderConfig(VlessProfile profile)
+    {
+        var ep = profile.AwgEndpoint?.DeepClone().AsObject()
+            ?? throw new InvalidOperationException("нет awg-endpoint в профиле");
+        var tag = (string?)ep["tag"] ?? "awg";
+        var cfg = new JsonObject
+        {
+            ["log"] = new JsonObject { ["level"] = "warn" },
+            ["inbounds"] = new JsonArray
+            {
+                new JsonObject { ["type"] = "mixed", ["tag"] = "in", ["listen"] = "127.0.0.1", ["listen_port"] = SocksPort }
+            },
+            ["endpoints"] = new JsonArray { ep },
+            ["outbounds"] = new JsonArray { new JsonObject { ["type"] = "direct", ["tag"] = "direct" } },
+            ["route"] = new JsonObject { ["final"] = tag, ["auto_detect_interface"] = true },
+        };
+        File.WriteAllText(AwgConfigPath, cfg.ToJsonString(Json.Opts));
+        L($"awg-провайдер '{profile.Name}' ({profile.Host}:{profile.Port}).");
     }
 
     // ---------- process helpers ----------
@@ -364,7 +388,12 @@ public class SingBoxManager
             L($"Провайдер для '{p.Name}' ({p.Host}:{p.Port}) [{p.Kind}].");
 
             StopProvider();
-            bool up = p.Kind == ProfileKind.Hysteria2 ? StartHyProvider(p) : StartXrayProvider(p);
+            bool up = p.Kind switch
+            {
+                ProfileKind.Hysteria2 => StartHyProvider(p),
+                ProfileKind.Awg => StartAwgProvider(p),
+                _ => StartXrayProvider(p),
+            };
             if (_userStopped) { Teardown(); return; }
             if (!up) { SetHealth(p.Name, false); StopProvider(); continue; }
 
@@ -401,6 +430,14 @@ public class SingBoxManager
     {
         try { BuildHyProviderConfig(p); } catch (Exception ex) { L("BuildHyProviderConfig: " + ex.Message); return false; }
         _provider = StartProc(SingBoxPath, $"run -c \"{HyConfigPath}\"", Path.Combine(_baseDir, "core"), "hy");
+        return WaitForPort(SocksPort, 8000);
+    }
+
+    // AWG — UDP, поэтому TCP-порт не проверяем (как и hysteria); handshake проверит сквозной Probe.
+    private bool StartAwgProvider(VlessProfile p)
+    {
+        try { BuildAwgProviderConfig(p); } catch (Exception ex) { L("BuildAwgProviderConfig: " + ex.Message); return false; }
+        _provider = StartProc(SingBoxPath, $"run -c \"{AwgConfigPath}\"", Path.Combine(_baseDir, "core"), "awg");
         return WaitForPort(SocksPort, 8000);
     }
 

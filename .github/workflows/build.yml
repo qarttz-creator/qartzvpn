@@ -29,6 +29,10 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'   # amnezia-box go.mod requires go 1.25
+
       - name: Версия
         id: ver
         shell: pwsh
@@ -95,13 +99,15 @@ jobs:
           Expand-Archive xray.zip -DestinationPath xray -Force
           Copy-Item xray\xray.exe publish\core\xray.exe -Force
 
-          # --- sing-box (последний СТАБИЛЬНЫЙ релиз, не alpha/beta) ---
-          $sbTag = gh api repos/SagerNet/sing-box/releases/latest --jq .tag_name
-          $sbVer = $sbTag.TrimStart('v')
+          # --- sing-box: AWG-capable, built from the Amnezia fork with -tags with_awg ---
+          # Upstream sing-box rejects AWG, so we build sing-box.exe from amnezia-box (the fork that
+          # adds the `awg` endpoint). The desktop runs it as a child process, so no API changes.
+          git clone --branch master --depth 1 https://github.com/amnezia-vpn/amnezia-box amnezia-box
+          Push-Location amnezia-box
+          go build -tags with_awg -trimpath -ldflags "-s -w" -o "$pwd\..\publish\core\sing-box.exe" ./cmd/sing-box
+          Pop-Location
+          $sbTag = "amnezia-box@master (with_awg)"
           Write-Host "sing-box: $sbTag"
-          curl.exe -fL -o sb.zip "https://github.com/SagerNet/sing-box/releases/download/$sbTag/sing-box-$sbVer-windows-amd64.zip"
-          Expand-Archive sb.zip -DestinationPath sb -Force
-          Copy-Item "sb\sing-box-$sbVer-windows-amd64\sing-box.exe" publish\core\sing-box.exe -Force
 
           "Xray $xrayTag`nsing-box $sbTag" | Out-File -Encoding utf8 publish\core\VERSIONS.txt
           Get-ChildItem publish\core
