@@ -104,9 +104,12 @@ jobs:
           # adds the `awg` endpoint). The desktop runs it as a child process, so no API changes.
           git clone --branch master --depth 1 https://github.com/amnezia-vpn/amnezia-box amnezia-box
           Push-Location amnezia-box
-          go build -tags with_awg -trimpath -ldflags "-s -w" -o "$pwd\..\publish\core\sing-box.exe" ./cmd/sing-box
+          # Tags matter: a bare `with_awg` drops the stock release tags, so the TUN loses its gVisor
+          # stack ("gVisor is not included in this build") and hysteria2 loses QUIC. gVisor is also
+          # what the AWG endpoint's own netstack dials through. Keep all three.
+          go build -tags "with_gvisor,with_quic,with_awg" -trimpath -ldflags "-s -w" -o "$pwd\..\publish\core\sing-box.exe" ./cmd/sing-box
           Pop-Location
-          $sbTag = "amnezia-box@master (with_awg)"
+          $sbTag = "amnezia-box@master (with_gvisor,with_quic,with_awg)"
           Write-Host "sing-box: $sbTag"
 
           "Xray $xrayTag`nsing-box $sbTag" | Out-File -Encoding utf8 publish\core\VERSIONS.txt
