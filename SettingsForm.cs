@@ -17,9 +17,9 @@ public class SettingsForm : Form
     private static string ExcludePath  => Path.Combine(AppContext.BaseDirectory, "exclude.txt");
     private static string AppsPath     => Path.Combine(AppContext.BaseDirectory, "apps.txt");
 
-    private static readonly Color Bg   = Color.FromArgb(22, 24, 36);
-    private static readonly Color Pan  = Color.FromArgb(34, 37, 54);
-    private static readonly Color Fg   = Color.Gainsboro;
+    private static readonly Color Bg   = Color.FromArgb(241, 241, 237);
+    private static readonly Color Pan  = Color.FromArgb(255, 255, 255);
+    private static readonly Color Fg   = Color.FromArgb(24, 25, 27);
 
     public SettingsForm()
     {
@@ -35,7 +35,7 @@ public class SettingsForm : Form
         var pInfo = new Label
         {
             Text = "Серверы приходят по ссылке активации от администратора. Выбор шлюза автоматический.",
-            ForeColor = Color.Gray, BackColor = Color.Transparent,
+            ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
             Location = new Point(20, 40), AutoSize = false, Size = new Size(400, 34),
             Font = new Font("Segoe UI", 8)
         };
@@ -57,7 +57,7 @@ public class SettingsForm : Form
         {
             Text = "Выключено — весь трафик идёт в туннель (кроме самого VPN-сервера). "
                  + "Включите, чтобы задать исключения.",
-            ForeColor = Color.Gray, BackColor = Color.Transparent,
+            ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
             Location = new Point(40, 172), Size = new Size(370, 34), Font = new Font("Segoe UI", 8)
         };
 
@@ -97,19 +97,19 @@ public class SettingsForm : Form
         {
             Text = "Поднимается при старте Windows под системной учётной записью — "
                  + "работает и без прав администратора у пользователя. Нужны права админа для включения.",
-            ForeColor = Color.Gray, BackColor = Color.Transparent,
+            ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
             Location = new Point(40, 392), Size = new Size(385, 44), Font = new Font("Segoe UI", 8)
         };
 
         var applyHint = new Label
         {
             Text = "Изменения применяются при следующем подключении.",
-            ForeColor = Color.Gray, BackColor = Color.Transparent,
+            ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
             Location = new Point(20, 444), Size = new Size(400, 20), Font = new Font("Segoe UI", 8)
         };
 
         var save = FlatButton("Сохранить", new Point(228, 472), 95);
-        save.BackColor = Color.FromArgb(0, 120, 215); save.ForeColor = Color.White;
+        save.BackColor = Color.FromArgb(30, 110, 114); save.ForeColor = Color.White;
         save.Click += (_, _) => { SaveState(); Close(); };
         var cancel = FlatButton("Отмена", new Point(333, 472), 85);
         cancel.Click += (_, _) => Close();
@@ -128,8 +128,8 @@ public class SettingsForm : Form
         bool r = _routing.Checked;
         _ipF.Enabled = r; _appF.Enabled = r;
         _ipEdit.Enabled = r; _appEdit.Enabled = r;
-        _ipF.ForeColor = r ? Fg : Color.Gray;
-        _appF.ForeColor = r ? Fg : Color.Gray;
+        _ipF.ForeColor = r ? Fg : Color.FromArgb(109, 112, 118);
+        _appF.ForeColor = r ? Fg : Color.FromArgb(109, 112, 118);
     }
 
     private void ToggleAutostart()
@@ -164,14 +164,14 @@ public class SettingsForm : Form
 
     private Label Header(string text, int y) => new()
     {
-        Text = text, ForeColor = Color.FromArgb(150, 180, 255), BackColor = Color.Transparent,
+        Text = text, ForeColor = Color.FromArgb(30, 110, 114), BackColor = Color.Transparent,
         Font = new Font("Segoe UI", 11, FontStyle.Bold),
         Location = new Point(18, y), AutoSize = true
     };
 
     private Label Sub(string text, int y) => new()
     {
-        Text = text, ForeColor = Color.Gray, BackColor = Color.Transparent,
+        Text = text, ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
         Font = new Font("Segoe UI", 8), Location = new Point(40, y), Size = new Size(235, 18)
     };
 
@@ -183,7 +183,7 @@ public class SettingsForm : Form
             FlatStyle = FlatStyle.Flat, ForeColor = Fg, BackColor = Pan,
             Font = new Font("Segoe UI", 9)
         };
-        b.FlatAppearance.BorderColor = Color.FromArgb(70, 75, 100);
+        b.FlatAppearance.BorderColor = Color.FromArgb(227, 226, 220);
         return b;
     }
 
@@ -196,7 +196,7 @@ public class SettingsForm : Form
             Multiline = true, ScrollBars = ScrollBars.Both, WordWrap = false, AcceptsReturn = true,
             Font = new Font("Consolas", 10), Location = new Point(10, 10),
             Size = new Size(f.ClientSize.Width - 20, f.ClientSize.Height - 90),
-            BackColor = Color.FromArgb(28, 30, 44), ForeColor = Color.White
+            BackColor = Color.FromArgb(255, 255, 255), ForeColor = Color.FromArgb(24, 25, 27)
         };
         tb.Text = text;
         return tb;
@@ -295,7 +295,7 @@ public class SettingsForm : Form
 
     private Label EditorHint(Form f, string text) => new()
     {
-        Text = text, ForeColor = Color.Gray, BackColor = Color.Transparent,
+        Text = text, ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
         Location = new Point(12, f.ClientSize.Height - 72), Size = new Size(360, 60),
         Font = new Font("Segoe UI", 8)
     };
@@ -306,7 +306,7 @@ public class SettingsForm : Form
         {
             Text = "Сохранить", Size = new Size(130, 32),
             Location = new Point(f.ClientSize.Width - 142, f.ClientSize.Height - 44),
-            FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.FromArgb(0, 120, 215)
+            FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.FromArgb(30, 110, 114)
         };
         return b;
     }

@@ -48,7 +48,7 @@ public class MainForm : Form
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Color.FromArgb(10, 12, 24);
+        BackColor = Color.FromArgb(241, 241, 237);
         BackgroundImage = Img("background.png");
         BackgroundImageLayout = ImageLayout.Stretch;
         var appIcon = AppIcon();
@@ -66,7 +66,7 @@ public class MainForm : Form
         tip.SetToolTip(_gear, "Настройки");
 
         _status.Text = "Отключено";
-        _status.ForeColor = Color.Gainsboro;
+        _status.ForeColor = Color.FromArgb(109, 112, 118);
         _status.BackColor = Color.Transparent;
         _status.Font = new Font("Segoe UI", 13);
         _status.TextAlign = ContentAlignment.MiddleCenter;
@@ -161,7 +161,7 @@ public class MainForm : Form
             if (_status.Text.StartsWith("Нет ") || _status.Text.StartsWith("Активируйте") || _status.Text.StartsWith("Ожидание"))
             {
                 _status.Text = _bootstrap ? "Активация — нажмите подключить" : "Отключено";
-                _status.ForeColor = _bootstrap ? Color.Khaki : Color.Gainsboro;
+                _status.ForeColor = _bootstrap ? Color.FromArgb(154, 107, 22) : Color.FromArgb(109, 112, 118);
             }
         }
         else
@@ -169,7 +169,7 @@ public class MainForm : Form
             _status.Text = string.IsNullOrWhiteSpace(Settings.Load().SubUrl)
                 ? "Активируйте приложение (шестерёнка)"
                 : "Ожидание активации — проверьте сеть";
-            _status.ForeColor = Color.Khaki;
+            _status.ForeColor = Color.FromArgb(154, 107, 22);
             _power.Enabled = false; _power.Cursor = Cursors.Default;
         }
     }
@@ -230,7 +230,7 @@ public class MainForm : Form
         if (connected is null)
         {
             _status.Text = "Подключение…";
-            _status.ForeColor = Color.Khaki;
+            _status.ForeColor = Color.FromArgb(154, 107, 22);
             _power.Enabled = false;
             _power.Cursor = Cursors.Default;
             return;
@@ -244,7 +244,7 @@ public class MainForm : Form
         {
             _power.Image = _imgActive;
             _status.Text = "Подключено";
-            _status.ForeColor = Color.FromArgb(120, 230, 170);
+            _status.ForeColor = Color.FromArgb(30, 110, 114);
             _tray.Text = "QartzVPN — подключено";
             StartHeartbeat();
             if (!_subPulled) { _subPulled = true; PullSubOverTunnel(); }
@@ -253,7 +253,7 @@ public class MainForm : Form
         {
             _power.Image = _imgIdle;
             _status.Text = "Отключено";
-            _status.ForeColor = Color.Gainsboro;
+            _status.ForeColor = Color.FromArgb(109, 112, 118);
             _tray.Text = "QartzVPN — отключено";
             StopHeartbeat();
         }
@@ -349,7 +349,7 @@ public class MainForm : Form
             "Обновление QartzVPN", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
         if (ans != DialogResult.Yes) return;
 
-        _status.Text = "Загрузка обновления…"; _status.ForeColor = Color.Khaki;
+        _status.Text = "Загрузка обновления…"; _status.ForeColor = Color.FromArgb(154, 107, 22);
         Task.Run(() =>
         {
             var path = Updater.Download(r);
@@ -374,7 +374,7 @@ public class MainForm : Form
         {
             try { _mgr.Stop(); } catch { } // connection is owned by the SYSTEM task — don't run our own
             _power.Enabled = false; _power.Cursor = Cursors.Default;
-            _status.Text = "Автозапуск — проверка…"; _status.ForeColor = Color.Khaki;
+            _status.Text = "Автозапуск — проверка…"; _status.ForeColor = Color.FromArgb(154, 107, 22);
             StartPoll();
         }
         else
@@ -412,13 +412,13 @@ public class MainForm : Form
                 {
                     _power.Image = _imgActive;
                     _status.Text = "Подключено (автозапуск)";
-                    _status.ForeColor = Color.FromArgb(120, 230, 170);
+                    _status.ForeColor = Color.FromArgb(30, 110, 114);
                 }
                 else
                 {
                     _power.Image = _imgIdle;
                     _status.Text = "Поднимается (автозапуск)…";
-                    _status.ForeColor = Color.Khaki;
+                    _status.ForeColor = Color.FromArgb(154, 107, 22);
                 }
             });
         });
