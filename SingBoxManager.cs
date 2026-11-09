@@ -76,6 +76,7 @@ public class SingBoxManager
     private string TemplatePath    => Path.Combine(_baseDir, "config.template.json");
     private string ExcludePath     => Path.Combine(_baseDir, "exclude.txt");
     private string AppsPath        => Path.Combine(_baseDir, "apps.txt");
+    private string DomainsPath     => Path.Combine(_baseDir, "domains.txt");
     private string XrayConfigPath  => Path.Combine(_baseDir, "xray-runtime.json");
     private string MainConfigPath  => Path.Combine(_baseDir, "main-config.json");
     private string HyConfigPath    => Path.Combine(_baseDir, "hy-provider.json");
@@ -116,11 +117,44 @@ public class SingBoxManager
         return list;
     }
 
+    /// <summary>Reads the domain bypass list → normalized apex domains (lowercased, no scheme/path/
+    /// port, no leading *. or .). Each is matched exactly AND as a suffix, so foo.com covers foo.com
+    /// and *.foo.com. A single-label name (no dot, e.g. an intranet host) is matched exactly only.</summary>
+    private List<string> ReadDomains()
+    {
+        var list = new List<string>();
+        if (!File.Exists(DomainsPath)) return list;
+        foreach (var raw in File.ReadAllLines(DomainsPath))
+        {
+            var line = raw;
+            var h = line.IndexOf('#');
+            if (h >= 0) line = line.Substring(0, h);
+            line = line.Trim().ToLowerInvariant();
+            if (line.Length == 0) continue;
+            int p;
+            if ((p = line.IndexOf("://")) >= 0) line = line.Substring(p + 3);
+            if ((p = line.IndexOf('/')) >= 0) line = line.Substring(0, p);
+            if ((p = line.IndexOf(':')) >= 0) line = line.Substring(0, p); // strip :port
+            line = line.TrimStart('*').TrimStart('.').Trim();
+            if (line.Length == 0) continue;
+            if (!list.Contains(line)) list.Add(line);
+        }
+        return list;
+    }
+
+    private static JsonArray JArr(IEnumerable<string> items)
+    {
+        var a = new JsonArray();
+        foreach (var s in items) a.Add(s);
+        return a;
+    }
+
     // ---------- config builders ----------
 
-    /// <summary>The TUN sing-box: everything → socks proxy (24808); only server IPs and user
-    /// exclusions go direct. No private-IP bypass by default — LAN is tunnelled/blocked unless the
-    /// admin added it to the IP exclusions.</summary>
+    /// <summary>The TUN sing-box: everything → socks proxy (24808); gateway IPs, private IPs,
+    /// local/intranet domains, RU domains and the user IP/domain/app exclusions go direct. Local and
+    /// private-IP bypass are always on (otherwise LAN names can't resolve and LAN hosts are
+    /// unreachable); the IP/domain/app filters are opt-in.</summary>
     private void BuildMainConfig(List<VlessProfile> cands)
     {
         if (!File.Exists(TemplatePath))
@@ -175,6 +209,42 @@ public class SingBoxManager
                 }
             }
         }
+
+        // --- Domains (not just IPs). Two problems the IP-only template has: (1) the only DNS is
+        // remote DoH over the tunnel, so LAN/intranet names (which that resolver doesn't know) never
+        // resolve; (2) nothing sends private IPs direct, so even a resolved 192.168.x goes into the
+        // tunnel and dies. Fix: a system (local) + a direct public resolver, send local/user domains
+        // to them, and route local/private/user domains straight out. Local handling is always on;
+        // the user domain list is the opt-in "domain filter" (parallel to the IP filter). ---
+        string[] localSuffixes = { ".local", ".lan", ".home", ".internal", ".intranet", ".localdomain", ".corp" };
+        var userDomains = (st.Routing && st.DomainFilter) ? ReadDomains() : new List<string>();
+
+        // DNS servers: a direct public DoH (dialed outside the tunnel) and the OS resolver (knows LAN,
+        // mDNS, the hosts file and VPN-pushed suffixes).
+        var dns = root["dns"]!.AsObject();
+        var dnsServers = dns["servers"]!.AsArray();
+        dnsServers.Add(new JsonObject { ["type"] = "https", ["tag"] = "dns-direct", ["server"] = "8.8.8.8" });
+        dnsServers.Add(new JsonObject { ["type"] = "local", ["tag"] = "dns-local" });
+        if (dns["rules"] is not JsonArray dnsRules) { dnsRules = new JsonArray(); dns["rules"] = dnsRules; }
+        var localDns = new List<string>(localSuffixes);
+        foreach (var d in userDomains) localDns.Add(d.Contains('.') ? "." + d : d);
+        dnsRules.Insert(0, new JsonObject { ["domain_suffix"] = JArr(localDns), ["server"] = "dns-local" });
+        if (st.RuDirect)
+            dnsRules.Add(new JsonObject { ["domain_suffix"] = JArr(new[] { ".ru", ".su", "xn--p1ai" }), ["server"] = "dns-direct" });
+
+        // Route: local/intranet domains and private IPs bypass the tunnel (always).
+        rules.Add(new JsonObject { ["domain_suffix"] = JArr(localSuffixes), ["action"] = "route", ["outbound"] = "direct" });
+        if (userDomains.Count > 0)
+        {
+            var exact = new List<string>();
+            var suffix = new List<string>();
+            foreach (var d in userDomains) { exact.Add(d); if (d.Contains('.')) suffix.Add("." + d); }
+            var dr = new JsonObject { ["domain"] = JArr(exact), ["action"] = "route", ["outbound"] = "direct" };
+            if (suffix.Count > 0) dr["domain_suffix"] = JArr(suffix);
+            rules.Add(dr);
+            L($"Исключения по доменам: {userDomains.Count}");
+        }
+        rules.Add(new JsonObject { ["ip_is_private"] = true, ["action"] = "route", ["outbound"] = "direct" });
 
         File.WriteAllText(MainConfigPath, root.ToJsonString(Json.Opts));
     }

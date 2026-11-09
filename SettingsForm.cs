@@ -7,15 +7,18 @@ public class SettingsForm : Form
     private readonly CheckBox _routing = new();
     private readonly CheckBox _ipF = new();
     private readonly CheckBox _appF = new();
+    private readonly CheckBox _domF = new();
     private readonly CheckBox _autostart = new();
     private readonly CheckBox _ruDirect = new();
     private readonly Button _ipEdit = new();
     private readonly Button _appEdit = new();
+    private readonly Button _domEdit = new();
     private bool _initAuto;
 
     private static string ProfilesPath => Path.Combine(AppContext.BaseDirectory, "profiles.txt");
     private static string ExcludePath  => Path.Combine(AppContext.BaseDirectory, "exclude.txt");
     private static string AppsPath     => Path.Combine(AppContext.BaseDirectory, "apps.txt");
+    private static string DomainsPath  => Path.Combine(AppContext.BaseDirectory, "domains.txt");
 
     private static readonly Color Bg   = Color.FromArgb(241, 241, 237);
     private static readonly Color Pan  = Color.FromArgb(255, 255, 255);
@@ -24,7 +27,7 @@ public class SettingsForm : Form
     public SettingsForm()
     {
         Text = "Настройки — QartzVPN";
-        ClientSize = new Size(440, 518);
+        ClientSize = new Size(440, 566);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false; MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
@@ -79,18 +82,27 @@ public class SettingsForm : Form
         _appEdit = FlatButton("Список приложений…", new Point(285, 258), 135);
         _appEdit.Click += (_, _) => EditApps();
 
+        // Фильтр по доменам
+        _domF.Text = "Фильтр по доменам";
+        _domF.ForeColor = Fg; _domF.BackColor = Color.Transparent; _domF.Font = new Font("Segoe UI", 9.5f);
+        _domF.Location = new Point(40, 306); _domF.AutoSize = true;
+        _domF.Checked = _st.DomainFilter;
+        var domSub = Sub("домены мимо туннеля (локальные/интранет)", 328);
+        _domEdit = FlatButton("Список доменов…", new Point(285, 306), 135);
+        _domEdit.Click += (_, _) => EditDomains();
+
         // RU напрямую
         _ruDirect.Text = "RU-сайты напрямую (.ru/.рф/.su в обход VPN)";
         _ruDirect.ForeColor = Fg; _ruDirect.BackColor = Color.Transparent; _ruDirect.Font = new Font("Segoe UI", 9.5f);
-        _ruDirect.Location = new Point(18, 300); _ruDirect.AutoSize = true;
+        _ruDirect.Location = new Point(18, 348); _ruDirect.AutoSize = true;
         _ruDirect.Checked = _st.RuDirect;
 
         // --- Автозапуск ---
-        var hAuto = Header("Автозапуск", 344);
+        var hAuto = Header("Автозапуск", 392);
         _autostart.Text = "Запускать с Windows и подключаться (для всех)";
         _autostart.ForeColor = Fg; _autostart.BackColor = Color.Transparent;
         _autostart.Font = new Font("Segoe UI", 9.5f);
-        _autostart.Location = new Point(18, 370); _autostart.AutoSize = true;
+        _autostart.Location = new Point(18, 418); _autostart.AutoSize = true;
         _autostart.Checked = AutoStart.IsEnabled();
         _autostart.CheckedChanged += (_, _) => ToggleAutostart();
         var autoSub = new Label
@@ -98,25 +110,26 @@ public class SettingsForm : Form
             Text = "Поднимается при старте Windows под системной учётной записью — "
                  + "работает и без прав администратора у пользователя. Нужны права админа для включения.",
             ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
-            Location = new Point(40, 392), Size = new Size(385, 44), Font = new Font("Segoe UI", 8)
+            Location = new Point(40, 440), Size = new Size(385, 44), Font = new Font("Segoe UI", 8)
         };
 
         var applyHint = new Label
         {
             Text = "Изменения применяются при следующем подключении.",
             ForeColor = Color.FromArgb(109, 112, 118), BackColor = Color.Transparent,
-            Location = new Point(20, 444), Size = new Size(400, 20), Font = new Font("Segoe UI", 8)
+            Location = new Point(20, 492), Size = new Size(400, 20), Font = new Font("Segoe UI", 8)
         };
 
-        var save = FlatButton("Сохранить", new Point(228, 472), 95);
+        var save = FlatButton("Сохранить", new Point(228, 520), 95);
         save.BackColor = Color.FromArgb(30, 110, 114); save.ForeColor = Color.White;
         save.Click += (_, _) => { SaveState(); Close(); };
-        var cancel = FlatButton("Отмена", new Point(333, 472), 85);
+        var cancel = FlatButton("Отмена", new Point(333, 520), 85);
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[] {
             hProf, pInfo, pEdit, pUpd, hRoute, _routing, rHint,
             _ipF, ipSub, _ipEdit, _appF, appSub, _appEdit,
+            _domF, domSub, _domEdit,
             _ruDirect, hAuto, _autostart, autoSub, applyHint, save, cancel
         });
 
@@ -126,10 +139,11 @@ public class SettingsForm : Form
     private void Sync()
     {
         bool r = _routing.Checked;
-        _ipF.Enabled = r; _appF.Enabled = r;
-        _ipEdit.Enabled = r; _appEdit.Enabled = r;
+        _ipF.Enabled = r; _appF.Enabled = r; _domF.Enabled = r;
+        _ipEdit.Enabled = r; _appEdit.Enabled = r; _domEdit.Enabled = r;
         _ipF.ForeColor = r ? Fg : Color.FromArgb(109, 112, 118);
         _appF.ForeColor = r ? Fg : Color.FromArgb(109, 112, 118);
+        _domF.ForeColor = r ? Fg : Color.FromArgb(109, 112, 118);
     }
 
     private void ToggleAutostart()
@@ -158,6 +172,7 @@ public class SettingsForm : Form
         _st.Routing = _routing.Checked;
         _st.IpFilter = _ipF.Checked;
         _st.AppsFilter = _appF.Checked;
+        _st.DomainFilter = _domF.Checked;
         _st.RuDirect = _ruDirect.Checked;
         _st.Save();
     }
@@ -279,6 +294,41 @@ public class SettingsForm : Form
                 "Не сохранено — укажите имя .exe без пути:\n\n" + string.Join("\n", bad) +
                 "\n\nПример: Discord.exe, cs2.exe"); return; }
             Write(AppsPath, tb.Text); f.Close();
+        };
+        f.Controls.AddRange(new Control[] { tb, hint, save });
+        f.ShowDialog(this);
+    }
+
+    private void EditDomains()
+    {
+        var f = EditorForm("Домены мимо туннеля — по одному на строку");
+        var tb = MakeEditor(f, File.Exists(DomainsPath) ? File.ReadAllText(DomainsPath) : "");
+        var hint = EditorHint(f, "Домен на строку — он и поддомены идут напрямую, мимо VPN: "
+                              + "intranet.company.local, nas.home, example.com. Комментарий — после #. "
+                              + "Локальные зоны (.local/.lan/.home и приватные IP) и так идут напрямую.");
+        var save = EditorSave(f);
+        save.Click += (_, _) =>
+        {
+            var bad = new List<string>(); int n = 0;
+            foreach (var raw in tb.Lines)
+            {
+                n++; var line = raw;
+                var h = line.IndexOf('#'); if (h >= 0) line = line.Substring(0, h);
+                line = line.Trim().ToLowerInvariant(); if (line.Length == 0) continue;
+                int p;
+                if ((p = line.IndexOf("://")) >= 0) line = line.Substring(p + 3);
+                if ((p = line.IndexOf('/')) >= 0) line = line.Substring(0, p);
+                if ((p = line.IndexOf(':')) >= 0) line = line.Substring(0, p);
+                line = line.TrimStart('*').TrimStart('.').Trim();
+                // a hostname label: letters/digits/hyphen, dot-separated; single label allowed
+                var ok = line.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(
+                    line, @"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*$");
+                if (!ok) bad.Add($"строка {n}: {Trunc(raw.Trim())}");
+            }
+            if (bad.Count > 0) { Warn("Проверка доменов",
+                "Не сохранено — это не похоже на домен:\n\n" + string.Join("\n", bad) +
+                "\n\nПример: example.com, nas.home, intranet.company.local"); return; }
+            Write(DomainsPath, tb.Text); f.Close();
         };
         f.Controls.AddRange(new Control[] { tb, hint, save });
         f.ShowDialog(this);

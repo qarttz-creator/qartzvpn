@@ -12,6 +12,7 @@ public class Settings
     public bool Routing = true;
     public bool IpFilter = false;
     public bool AppsFilter = false;
+    public bool DomainFilter = false; // route a user-defined list of domains straight out (bypass VPN)
     public bool RuDirect = true;   // route RU domains (.ru/.рф/.su) straight out, bypassing the VPN
     public string SubUrl = "";   // subscription link from the admin (https://…/sub?token=…)
 
@@ -29,6 +30,7 @@ public class Settings
                     Routing    = (bool?)o["routing"]    ?? true,
                     IpFilter   = (bool?)o["ipFilter"]   ?? false,
                     AppsFilter = (bool?)o["appsFilter"] ?? false,
+                    DomainFilter = (bool?)o["domainFilter"] ?? false,
                     RuDirect   = (bool?)o["ruDirect"]   ?? true,
                     SubUrl     = (string?)o["subUrl"]   ?? "",
                 };
@@ -45,6 +47,7 @@ public class Settings
             ["routing"]    = Routing,
             ["ipFilter"]   = IpFilter,
             ["appsFilter"] = AppsFilter,
+            ["domainFilter"] = DomainFilter,
             ["ruDirect"]   = RuDirect,
             ["subUrl"]     = SubUrl,
         };
