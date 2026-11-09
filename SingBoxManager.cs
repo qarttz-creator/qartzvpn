@@ -223,11 +223,13 @@ public class SingBoxManager
         var userSuffix = new List<string>();                    // ".name" → subdomains
         foreach (var d in userDomains) if (d.Contains('.')) userSuffix.Add("." + d);
 
-        // DNS: send local suffixes, the user list AND RU to the OS resolver. A domain_suffix like
-        // ".foo.ru" matches only *.foo.ru, NOT foo.ru itself, so the user list needs both a `domain`
-        // (exact) and `domain_suffix` matcher — otherwise an apex such as a2nta.goldpolus.ru slips
-        // past and gets resolved by the wrong (public/tunnelled) server. Everything else stays on the
-        // tunnelled DoH (dns.final).
+        // DNS: send local suffixes and the user bypass list to the OS resolver (the external network's
+        // DNS — corporate/router if present, else the ISP's). RU is deliberately NOT sent here: it
+        // keeps resolving over the tunnelled DoH (dns.final), so the ISP never sees the query — RU only
+        // bypasses at the route level, not the DNS. Resolving via the local DNS leaves a trace, so it's
+        // opt-in: the user consents by adding a domain to the list. A domain_suffix like ".foo.ru"
+        // matches only *.foo.ru, NOT foo.ru itself, so the user list needs both a `domain` (exact) and
+        // a `domain_suffix` matcher — otherwise an apex such as a2nta.goldpolus.ru slips past.
         var dns = root["dns"]!.AsObject();
         dns["servers"]!.AsArray().Add(new JsonObject { ["type"] = "local", ["tag"] = "dns-local" });
         if (dns["rules"] is not JsonArray dnsRules) { dnsRules = new JsonArray(); dns["rules"] = dnsRules; }
@@ -235,8 +237,6 @@ public class SingBoxManager
         var localDnsRule = new JsonObject { ["domain_suffix"] = JArr(dnsSuffix), ["server"] = "dns-local" };
         if (userExact.Count > 0) localDnsRule["domain"] = JArr(userExact);
         dnsRules.Insert(0, localDnsRule);
-        if (st.RuDirect)
-            dnsRules.Add(new JsonObject { ["domain_suffix"] = JArr(new[] { ".ru", ".su", "xn--p1ai" }), ["server"] = "dns-local" });
 
         // Route: local/intranet domains, the user list and private IPs bypass the tunnel. (RU route→
         // direct is added above; local + private are always on, the user list is opt-in.)
