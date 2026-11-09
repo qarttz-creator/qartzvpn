@@ -213,36 +213,40 @@ public class SingBoxManager
         // --- Domains (not just IPs). Two problems the IP-only template has: (1) the only DNS is
         // remote DoH over the tunnel, so LAN/intranet names (which that resolver doesn't know) never
         // resolve; (2) nothing sends private IPs direct, so even a resolved 192.168.x goes into the
-        // tunnel and dies. Fix: a system (local) + a direct public resolver, send local/user domains
-        // to them, and route local/private/user domains straight out. Local handling is always on;
-        // the user domain list is the opt-in "domain filter" (parallel to the IP filter). ---
+        // tunnel and dies. Fix: resolve local/intranet, RU and user-listed domains via the OS resolver
+        // (type:local — it knows LAN names, incl. a *.ru that only exists on the LAN, mDNS, the hosts
+        // file and VPN-pushed suffixes), and route them + private IPs straight out. Local/RU handling
+        // is always on; the user domain list is the opt-in "domain filter" (parallel to the IP filter). ---
         string[] localSuffixes = { ".local", ".lan", ".home", ".internal", ".intranet", ".localdomain", ".corp" };
         var userDomains = (st.Routing && st.DomainFilter) ? ReadDomains() : new List<string>();
+        var userExact = new List<string>(userDomains);          // apex (and single-label) names
+        var userSuffix = new List<string>();                    // ".name" → subdomains
+        foreach (var d in userDomains) if (d.Contains('.')) userSuffix.Add("." + d);
 
-        // DNS servers: a direct public DoH (dialed outside the tunnel) and the OS resolver (knows LAN,
-        // mDNS, the hosts file and VPN-pushed suffixes).
+        // DNS: send local suffixes, the user list AND RU to the OS resolver. A domain_suffix like
+        // ".foo.ru" matches only *.foo.ru, NOT foo.ru itself, so the user list needs both a `domain`
+        // (exact) and `domain_suffix` matcher — otherwise an apex such as a2nta.goldpolus.ru slips
+        // past and gets resolved by the wrong (public/tunnelled) server. Everything else stays on the
+        // tunnelled DoH (dns.final).
         var dns = root["dns"]!.AsObject();
-        var dnsServers = dns["servers"]!.AsArray();
-        dnsServers.Add(new JsonObject { ["type"] = "https", ["tag"] = "dns-direct", ["server"] = "8.8.8.8" });
-        dnsServers.Add(new JsonObject { ["type"] = "local", ["tag"] = "dns-local" });
+        dns["servers"]!.AsArray().Add(new JsonObject { ["type"] = "local", ["tag"] = "dns-local" });
         if (dns["rules"] is not JsonArray dnsRules) { dnsRules = new JsonArray(); dns["rules"] = dnsRules; }
-        var localDns = new List<string>(localSuffixes);
-        foreach (var d in userDomains) localDns.Add(d.Contains('.') ? "." + d : d);
-        dnsRules.Insert(0, new JsonObject { ["domain_suffix"] = JArr(localDns), ["server"] = "dns-local" });
+        var dnsSuffix = new List<string>(localSuffixes); dnsSuffix.AddRange(userSuffix);
+        var localDnsRule = new JsonObject { ["domain_suffix"] = JArr(dnsSuffix), ["server"] = "dns-local" };
+        if (userExact.Count > 0) localDnsRule["domain"] = JArr(userExact);
+        dnsRules.Insert(0, localDnsRule);
         if (st.RuDirect)
-            dnsRules.Add(new JsonObject { ["domain_suffix"] = JArr(new[] { ".ru", ".su", "xn--p1ai" }), ["server"] = "dns-direct" });
+            dnsRules.Add(new JsonObject { ["domain_suffix"] = JArr(new[] { ".ru", ".su", "xn--p1ai" }), ["server"] = "dns-local" });
 
-        // Route: local/intranet domains and private IPs bypass the tunnel (always).
+        // Route: local/intranet domains, the user list and private IPs bypass the tunnel. (RU route→
+        // direct is added above; local + private are always on, the user list is opt-in.)
         rules.Add(new JsonObject { ["domain_suffix"] = JArr(localSuffixes), ["action"] = "route", ["outbound"] = "direct" });
-        if (userDomains.Count > 0)
+        if (userExact.Count > 0)
         {
-            var exact = new List<string>();
-            var suffix = new List<string>();
-            foreach (var d in userDomains) { exact.Add(d); if (d.Contains('.')) suffix.Add("." + d); }
-            var dr = new JsonObject { ["domain"] = JArr(exact), ["action"] = "route", ["outbound"] = "direct" };
-            if (suffix.Count > 0) dr["domain_suffix"] = JArr(suffix);
+            var dr = new JsonObject { ["domain"] = JArr(userExact), ["action"] = "route", ["outbound"] = "direct" };
+            if (userSuffix.Count > 0) dr["domain_suffix"] = JArr(userSuffix);
             rules.Add(dr);
-            L($"Исключения по доменам: {userDomains.Count}");
+            L($"Исключения по доменам: {userExact.Count}");
         }
         rules.Add(new JsonObject { ["ip_is_private"] = true, ["action"] = "route", ["outbound"] = "direct" });
 
