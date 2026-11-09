@@ -169,12 +169,15 @@ public class SettingsForm : Form
 
     private void SaveState()
     {
-        _st.Routing = _routing.Checked;
-        _st.IpFilter = _ipF.Checked;
-        _st.AppsFilter = _appF.Checked;
-        _st.DomainFilter = _domF.Checked;
-        _st.RuDirect = _ruDirect.Checked;
-        _st.Save();
+        // Reload fresh so a subscription changed via "Сменить подписку" (ActivationForm already saved
+        // it) isn't clobbered by this form's stale in-memory copy. We only own the routing toggles.
+        var st = Settings.Load();
+        st.Routing = _routing.Checked;
+        st.IpFilter = _ipF.Checked;
+        st.AppsFilter = _appF.Checked;
+        st.DomainFilter = _domF.Checked;
+        st.RuDirect = _ruDirect.Checked;
+        st.Save();
     }
 
     private Label Header(string text, int y) => new()
