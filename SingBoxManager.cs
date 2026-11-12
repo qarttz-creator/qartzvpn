@@ -341,14 +341,12 @@ public class SingBoxManager
     /// `awg` endpoint tunnels everything to the gateway. Needs the AWG-capable sing-box.exe built
     /// from the amnezia-box fork with -tags with_awg (the CI build does exactly this).</summary>
     private void BuildAwgProviderConfig(VlessProfile profile) => BuildAwgProviderConfig(profile, SocksPort, AwgConfigPath);
-    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath) => BuildAwgProviderConfig(profile, port, outPath, censusDns: false);
 
-    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath, bool censusDns)
+    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath)
     {
         var ep = profile.AwgEndpoint?.DeepClone().AsObject()
             ?? throw new InvalidOperationException("нет awg-endpoint в профиле");
         var tag = (string?)ep["tag"] ?? "awg";
-        var route = new JsonObject { ["final"] = tag, ["auto_detect_interface"] = true };
         var cfg = new JsonObject
         {
             ["log"] = new JsonObject { ["level"] = "warn" },
@@ -358,26 +356,8 @@ public class SingBoxManager
             },
             ["endpoints"] = new JsonArray { ep },
             ["outbounds"] = new JsonArray { new JsonObject { ["type"] = "direct", ["tag"] = "direct" } },
-            ["route"] = route,
+            ["route"] = new JsonObject { ["final"] = tag, ["auto_detect_interface"] = true },
         };
-        // Для censu-скана awg-провайдер стоит сам по себе (без главного TUN, который обычно резолвит
-        // DNS), а проб идёт по домену www.gstatic.com. AWG везёт только IP-пакеты, поэтому имя надо
-        // резолвить клиентски — без своего DNS awg-дайл валится «cannot marshal DNS message», и
-        // маршрут числится мёртвым, хотя живой. Даём провайдеру прямой DoH и привязываем резолв
-        // awg-endpoint'а к нему. Боевой путь (censusDns=false) DNS резолвит главный TUN — не трогаем.
-        if (censusDns)
-        {
-            cfg["dns"] = new JsonObject
-            {
-                ["servers"] = new JsonArray
-                {
-                    new JsonObject { ["type"] = "https", ["tag"] = "dns-direct", ["server"] = "8.8.8.8" }
-                },
-                ["strategy"] = "ipv4_only",
-            };
-            ep["domain_resolver"] = "dns-direct";
-            route["default_domain_resolver"] = new JsonObject { ["server"] = "dns-direct" };
-        }
         File.WriteAllText(outPath, cfg.ToJsonString(Json.Opts));
         L($"awg-провайдер '{profile.Name}' ({profile.Host}:{profile.Port}).");
     }
@@ -436,8 +416,12 @@ public class SingBoxManager
     }
 
     private bool Probe(int timeoutMs) => Probe(timeoutMs, SocksPort);
+    private bool Probe(int timeoutMs, int port) => Probe(timeoutMs, port, "http://www.gstatic.com/generate_204", anyResponse: false);
 
-    private bool Probe(int timeoutMs, int port)
+    // url — что дёргаем; anyResponse=true: достаточно ЛЮБОГО HTTP-ответа (туннель донёс запрос и получил
+    // ответ). Это для censu-проба по IP, где 204 нет и, главное, не нужен резолв домена — для AWG это
+    // критично: он везёт только IP-пакеты, и домен через не-поднятый awg резолвить нечем.
+    private bool Probe(int timeoutMs, int port, string url, bool anyResponse)
     {
         try
         {
@@ -449,8 +433,8 @@ public class SingBoxManager
                 AllowAutoRedirect = false,
             };
             using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
-            var r = http.GetAsync("http://www.gstatic.com/generate_204").GetAwaiter().GetResult();
-            return (int)r.StatusCode == 204 || r.IsSuccessStatusCode;
+            var r = http.GetAsync(url).GetAwaiter().GetResult();
+            return anyResponse || (int)r.StatusCode == 204 || r.IsSuccessStatusCode;
         }
         catch (Exception ex) { L("Probe: " + ex.Message); return false; }
     }
@@ -709,7 +693,7 @@ public class SingBoxManager
             started = p.Kind switch
             {
                 ProfileKind.Hysteria2 => StartCensusProvider(p, BuildHyProviderConfig, SingBoxPath, CensusHyPath, Path.Combine(_baseDir, "core"), checkTcp: false),
-                ProfileKind.Awg       => StartCensusProvider(p, (pp, pt, path) => BuildAwgProviderConfig(pp, pt, path, censusDns: true), SingBoxPath, CensusAwgPath, Path.Combine(_baseDir, "core"), checkTcp: false),
+                ProfileKind.Awg       => StartCensusProvider(p, BuildAwgProviderConfig, SingBoxPath, CensusAwgPath, Path.Combine(_baseDir, "core"), checkTcp: false),
                 _                     => StartCensusProvider(p, BuildXrayConfig, XrayPath, CensusXrayPath, _baseDir, checkTcp: true),
             };
         }
@@ -718,7 +702,9 @@ public class SingBoxManager
         if (!started) { StopCensusProc(); return false; }
 
         bool ok = false;
-        for (int i = 0; i < 2 && !ok; i++) { if (_userStopped) break; ok = Probe(7000, CensusPort); }
+        // проба по IP + «любой ответ»: без резолва домена (иначе AWG, который везёт только IP, валит
+        // проверку). 3 попытки по 8с — AWG-хендшейку нужно время на первый коннект.
+        for (int i = 0; i < 3 && !ok; i++) { if (_userStopped) break; ok = Probe(8000, CensusPort, "http://1.1.1.1", anyResponse: true); }
         StopCensusProc();
         L($"census '{p.Name}': {(ok ? "жив" : "мёртв")}");
         return ok;
