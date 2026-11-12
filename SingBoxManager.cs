@@ -28,6 +28,7 @@ public class SingBoxManager
     private readonly string _baseDir;
     private readonly string _logPath;
     private const int SocksPort = 24808;
+    private const int CensusPort = 24809;   // scratch-порт для фонового скана маршрутов
 
     private readonly object _gate = new();
     private volatile bool _connecting;
@@ -38,6 +39,12 @@ public class SingBoxManager
     private int _probeFails;
     private System.Threading.Timer? _watchdog;
     private System.Threading.Timer? _retry;
+
+    // census: фоновый скан всех маршрутов
+    private System.Threading.Timer? _census;
+    private Process? _censusProc;
+    private readonly object _censusGate = new();
+    private volatile bool _censusRunning;
 
     // телеметрия доступности маршрутов (для /hb → панель)
     private readonly object _healthGate = new();
@@ -81,6 +88,9 @@ public class SingBoxManager
     private string MainConfigPath  => Path.Combine(_baseDir, "main-config.json");
     private string HyConfigPath    => Path.Combine(_baseDir, "hy-provider.json");
     private string AwgConfigPath   => Path.Combine(_baseDir, "awg-provider.json");
+    private string CensusXrayPath  => Path.Combine(_baseDir, "census-xray.json");
+    private string CensusHyPath    => Path.Combine(_baseDir, "census-hy.json");
+    private string CensusAwgPath   => Path.Combine(_baseDir, "census-awg.json");
 
     private List<string> ReadExcludes()
     {
@@ -253,7 +263,9 @@ public class SingBoxManager
         File.WriteAllText(MainConfigPath, root.ToJsonString(Json.Opts));
     }
 
-    private void BuildXrayConfig(VlessProfile profile)
+    private void BuildXrayConfig(VlessProfile profile) => BuildXrayConfig(profile, SocksPort, XrayConfigPath);
+
+    private void BuildXrayConfig(VlessProfile profile, int port, string outPath)
     {
         var cfg = new JsonObject
         {
@@ -264,19 +276,21 @@ public class SingBoxManager
                 {
                     ["tag"] = "socks",
                     ["listen"] = "127.0.0.1",
-                    ["port"] = SocksPort,
+                    ["port"] = port,
                     ["protocol"] = "socks",
                     ["settings"] = new JsonObject { ["udp"] = true }
                 }
             },
             ["outbounds"] = new JsonArray { profile.BuildXrayOutbound() }
         };
-        File.WriteAllText(XrayConfigPath, cfg.ToJsonString(Json.Opts));
+        File.WriteAllText(outPath, cfg.ToJsonString(Json.Opts));
         L($"xray-конфиг '{profile.Name}' ({profile.Host}:{profile.Port}).");
     }
 
     /// <summary>Hysteria2 provider: a second sing-box with a local socks on 24808 (no TUN).</summary>
-    private void BuildHyProviderConfig(VlessProfile profile)
+    private void BuildHyProviderConfig(VlessProfile profile) => BuildHyProviderConfig(profile, SocksPort, HyConfigPath);
+
+    private void BuildHyProviderConfig(VlessProfile profile, int port, string outPath)
     {
         var outs = new JsonArray { profile.BuildSingboxOutbound(), new JsonObject { ["type"] = "direct", ["tag"] = "direct" } };
         var cfg = new JsonObject
@@ -284,19 +298,21 @@ public class SingBoxManager
             ["log"] = new JsonObject { ["level"] = "warn" },
             ["inbounds"] = new JsonArray
             {
-                new JsonObject { ["type"] = "mixed", ["tag"] = "in", ["listen"] = "127.0.0.1", ["listen_port"] = SocksPort }
+                new JsonObject { ["type"] = "mixed", ["tag"] = "in", ["listen"] = "127.0.0.1", ["listen_port"] = port }
             },
             ["outbounds"] = outs,
             ["route"] = new JsonObject { ["final"] = "proxy" }
         };
-        File.WriteAllText(HyConfigPath, cfg.ToJsonString(Json.Opts));
+        File.WriteAllText(outPath, cfg.ToJsonString(Json.Opts));
         L($"hysteria-провайдер '{profile.Name}' ({profile.Host}:{profile.Port}).");
     }
 
     /// <summary>AmneziaWG provider: a second sing-box with a local socks on 24808 (no TUN) whose
     /// `awg` endpoint tunnels everything to the gateway. Needs the AWG-capable sing-box.exe built
     /// from the amnezia-box fork with -tags with_awg (the CI build does exactly this).</summary>
-    private void BuildAwgProviderConfig(VlessProfile profile)
+    private void BuildAwgProviderConfig(VlessProfile profile) => BuildAwgProviderConfig(profile, SocksPort, AwgConfigPath);
+
+    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath)
     {
         var ep = profile.AwgEndpoint?.DeepClone().AsObject()
             ?? throw new InvalidOperationException("нет awg-endpoint в профиле");
@@ -306,13 +322,13 @@ public class SingBoxManager
             ["log"] = new JsonObject { ["level"] = "warn" },
             ["inbounds"] = new JsonArray
             {
-                new JsonObject { ["type"] = "mixed", ["tag"] = "in", ["listen"] = "127.0.0.1", ["listen_port"] = SocksPort }
+                new JsonObject { ["type"] = "mixed", ["tag"] = "in", ["listen"] = "127.0.0.1", ["listen_port"] = port }
             },
             ["endpoints"] = new JsonArray { ep },
             ["outbounds"] = new JsonArray { new JsonObject { ["type"] = "direct", ["tag"] = "direct" } },
             ["route"] = new JsonObject { ["final"] = tag, ["auto_detect_interface"] = true },
         };
-        File.WriteAllText(AwgConfigPath, cfg.ToJsonString(Json.Opts));
+        File.WriteAllText(outPath, cfg.ToJsonString(Json.Opts));
         L($"awg-провайдер '{profile.Name}' ({profile.Host}:{profile.Port}).");
     }
 
@@ -369,13 +385,15 @@ public class SingBoxManager
         catch { return false; }
     }
 
-    private bool Probe(int timeoutMs)
+    private bool Probe(int timeoutMs) => Probe(timeoutMs, SocksPort);
+
+    private bool Probe(int timeoutMs, int port)
     {
         try
         {
             var handler = new SocketsHttpHandler
             {
-                Proxy = new WebProxy($"socks5://127.0.0.1:{SocksPort}"),
+                Proxy = new WebProxy($"socks5://127.0.0.1:{port}"),
                 UseProxy = true,
                 ConnectTimeout = TimeSpan.FromMilliseconds(Math.Min(timeoutMs, 8000)),
                 AllowAutoRedirect = false,
@@ -481,6 +499,7 @@ public class SingBoxManager
             StateChanged?.Invoke(true);
             Status?.Invoke($"Подключено: {p.Name}");
             StartWatchdog();
+            StartCensus();
             return;
         }
 
@@ -558,6 +577,7 @@ public class SingBoxManager
         if (_userStopped || _connecting) return;
         _connecting = true;
         StopWatchdog();
+        StopCensusProc(); // прибить скан на лету, чтобы не мешал пересборке
         StopProvider(); // TUN (_main) остаётся — kill switch держит, утечки нет
         L($"Связь потеряна: {reason}. Пересобираю (TUN остаётся поднят).");
         var cands = _candidates;
@@ -566,6 +586,122 @@ public class SingBoxManager
         StateChanged?.Invoke(false);
         Status?.Invoke("Переподключение…");
         BeginConnect(cands, _autoSwitch, idx < 0 ? 0 : (idx + 1) % Math.Max(cands.Count, 1));
+    }
+
+    // ---------- census: фоновый скан ВСЕХ маршрутов ----------
+    // Основной перебор (ConnectLoop) останавливается на первом живом шлюзе, поэтому про остальные
+    // маршруты здоровье неизвестно. Censu-скан периодически поднимает КАЖДЫЙ неактивный маршрут на
+    // отдельном scratch-порту (24809; боевой 24808/TUN/активный провайдер не трогаем), гоняет сквозную
+    // проверку и пишет результат в _routeHealth. Это и есть «полный скан», как urltest на Android:
+    // в /hb → панель уходит реальная картина живых/мёртвых по всем шлюзам, а не только активного.
+
+    private void StartCensus()
+    {
+        StopCensus();
+        _census = new System.Threading.Timer(_ => CensusTick(), null, 12000, 75000);
+    }
+
+    private void StopCensus()
+    {
+        try { _census?.Dispose(); } catch { }
+        _census = null;
+        StopCensusProc();
+    }
+
+    private void StopCensusProc()
+    {
+        var p = _censusProc;
+        _censusProc = null;
+        try { if (p is { HasExited: false }) { p.Kill(entireProcessTree: true); p.WaitForExit(3000); } } catch { }
+    }
+
+    private void CensusTick()
+    {
+        if (_userStopped || _connecting) return;
+        if (!(_main is { HasExited: false })) return;     // смысл только при поднятом TUN
+        lock (_censusGate) { if (_censusRunning) return; _censusRunning = true; }
+        try { CensusScan(); }
+        catch (Exception ex) { L("census: " + ex.Message); }
+        finally { lock (_censusGate) _censusRunning = false; }
+    }
+
+    private void CensusScan()
+    {
+        var cands = _candidates;
+        if (cands == null || cands.Count == 0) return;
+        var active = _active;
+
+        var names = new HashSet<string>();
+        foreach (var p in cands)
+        {
+            if (_userStopped || _connecting) return;
+            if (!(_main is { HasExited: false })) return;
+            names.Add(p.Name);
+
+            // активный маршрут держит watchdog — он заведомо жив, не трогаем его порт
+            if (active != null && ReferenceEquals(p, active)) { SetHealth(p.Name, true); continue; }
+
+            SetHealth(p.Name, CensusProbeRoute(p));
+        }
+
+        // убрать из health шлюзы, которых больше нет в списке (сменилась подписка)
+        lock (_healthGate)
+            foreach (var k in _routeHealth.Keys.Where(k => !names.Contains(k)).ToList())
+                _routeHealth.Remove(k);
+    }
+
+    private bool CensusProbeRoute(VlessProfile p)
+    {
+        StopCensusProc();
+        bool started;
+        try
+        {
+            started = p.Kind switch
+            {
+                ProfileKind.Hysteria2 => StartCensusProvider(p, BuildHyProviderConfig, SingBoxPath, CensusHyPath, Path.Combine(_baseDir, "core"), checkTcp: false),
+                ProfileKind.Awg       => StartCensusProvider(p, BuildAwgProviderConfig, SingBoxPath, CensusAwgPath, Path.Combine(_baseDir, "core"), checkTcp: false),
+                _                     => StartCensusProvider(p, BuildXrayConfig, XrayPath, CensusXrayPath, _baseDir, checkTcp: true),
+            };
+        }
+        catch (Exception ex) { L($"census '{p.Name}': {ex.Message}"); StopCensusProc(); return false; }
+
+        if (!started) { StopCensusProc(); return false; }
+
+        bool ok = false;
+        for (int i = 0; i < 2 && !ok; i++) { if (_userStopped) break; ok = Probe(7000, CensusPort); }
+        StopCensusProc();
+        L($"census '{p.Name}': {(ok ? "жив" : "мёртв")}");
+        return ok;
+    }
+
+    // строит scratch-конфиг на CensusPort, поднимает ядро на нём и ждёт порт
+    private bool StartCensusProvider(VlessProfile p, Action<VlessProfile, int, string> build,
+                                     string core, string cfgPath, string workDir, bool checkTcp)
+    {
+        if (checkTcp && !PortAlive(p.Host, p.Port, 2500)) return false;  // TCP-маршрут: быстрый отсев
+        build(p, CensusPort, cfgPath);
+        _censusProc = StartCensusProc(core, $"run -c \"{cfgPath}\"", workDir);
+        return WaitForPort(CensusPort, 8000);
+    }
+
+    // тихий запуск ядра для скана: без EnableRaisingEvents/Exited (иначе Kill дёрнул бы HealthLost
+    // и спровоцировал боевое переподключение). Вывод дренируем в никуда, чтобы не висло на буфере.
+    private Process StartCensusProc(string file, string args, string workDir)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = file, Arguments = args, WorkingDirectory = workDir,
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+        };
+        var pr = new Process { StartInfo = psi };
+        pr.OutputDataReceived += (_, _) => { };
+        pr.ErrorDataReceived += (_, _) => { };
+        pr.Start();
+        pr.BeginOutputReadLine();
+        pr.BeginErrorReadLine();
+        return pr;
     }
 
     // ---------- teardown ----------
@@ -590,13 +726,14 @@ public class SingBoxManager
         try { if (p is { HasExited: false }) { p.Kill(entireProcessTree: true); p.WaitForExit(3000); } } catch { }
     }
 
-    private void Teardown() { StopProvider(); StopMain(); }
+    private void Teardown() { StopCensusProc(); StopProvider(); StopMain(); }
 
     public void Stop()
     {
         _userStopped = true;
         StopWatchdog();
         StopRetry();
+        StopCensus();
         StopProvider();
         StopMain();
         _active = null;
