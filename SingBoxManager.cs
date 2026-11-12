@@ -341,12 +341,14 @@ public class SingBoxManager
     /// `awg` endpoint tunnels everything to the gateway. Needs the AWG-capable sing-box.exe built
     /// from the amnezia-box fork with -tags with_awg (the CI build does exactly this).</summary>
     private void BuildAwgProviderConfig(VlessProfile profile) => BuildAwgProviderConfig(profile, SocksPort, AwgConfigPath);
+    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath) => BuildAwgProviderConfig(profile, port, outPath, censusDns: false);
 
-    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath)
+    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath, bool censusDns)
     {
         var ep = profile.AwgEndpoint?.DeepClone().AsObject()
             ?? throw new InvalidOperationException("нет awg-endpoint в профиле");
         var tag = (string?)ep["tag"] ?? "awg";
+        var route = new JsonObject { ["final"] = tag, ["auto_detect_interface"] = true };
         var cfg = new JsonObject
         {
             ["log"] = new JsonObject { ["level"] = "warn" },
@@ -356,8 +358,26 @@ public class SingBoxManager
             },
             ["endpoints"] = new JsonArray { ep },
             ["outbounds"] = new JsonArray { new JsonObject { ["type"] = "direct", ["tag"] = "direct" } },
-            ["route"] = new JsonObject { ["final"] = tag, ["auto_detect_interface"] = true },
+            ["route"] = route,
         };
+        // Для censu-скана awg-провайдер стоит сам по себе (без главного TUN, который обычно резолвит
+        // DNS), а проб идёт по домену www.gstatic.com. AWG везёт только IP-пакеты, поэтому имя надо
+        // резолвить клиентски — без своего DNS awg-дайл валится «cannot marshal DNS message», и
+        // маршрут числится мёртвым, хотя живой. Даём провайдеру прямой DoH и привязываем резолв
+        // awg-endpoint'а к нему. Боевой путь (censusDns=false) DNS резолвит главный TUN — не трогаем.
+        if (censusDns)
+        {
+            cfg["dns"] = new JsonObject
+            {
+                ["servers"] = new JsonArray
+                {
+                    new JsonObject { ["type"] = "https", ["tag"] = "dns-direct", ["server"] = "8.8.8.8" }
+                },
+                ["strategy"] = "ipv4_only",
+            };
+            ep["domain_resolver"] = "dns-direct";
+            route["default_domain_resolver"] = new JsonObject { ["server"] = "dns-direct" };
+        }
         File.WriteAllText(outPath, cfg.ToJsonString(Json.Opts));
         L($"awg-провайдер '{profile.Name}' ({profile.Host}:{profile.Port}).");
     }
@@ -689,7 +709,7 @@ public class SingBoxManager
             started = p.Kind switch
             {
                 ProfileKind.Hysteria2 => StartCensusProvider(p, BuildHyProviderConfig, SingBoxPath, CensusHyPath, Path.Combine(_baseDir, "core"), checkTcp: false),
-                ProfileKind.Awg       => StartCensusProvider(p, BuildAwgProviderConfig, SingBoxPath, CensusAwgPath, Path.Combine(_baseDir, "core"), checkTcp: false),
+                ProfileKind.Awg       => StartCensusProvider(p, (pp, pt, path) => BuildAwgProviderConfig(pp, pt, path, censusDns: true), SingBoxPath, CensusAwgPath, Path.Combine(_baseDir, "core"), checkTcp: false),
                 _                     => StartCensusProvider(p, BuildXrayConfig, XrayPath, CensusXrayPath, _baseDir, checkTcp: true),
             };
         }
