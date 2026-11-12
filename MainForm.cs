@@ -8,12 +8,14 @@ public class MainForm : Form
     private readonly PictureBox _power = new();
     private readonly PictureBox _gear = new();
     private readonly Label _status = new();
+    private readonly Label _routes = new();   // «через <шлюз> · <proto> / живых маршрутов: X/Y»
     private readonly NotifyIcon _tray = new();
     private readonly List<VlessProfile> _profiles = new();
     private bool _connected;
     private System.Threading.Timer? _heartbeat;
     private bool _autostartMode;
     private System.Windows.Forms.Timer? _poll;
+    private System.Windows.Forms.Timer? _routeTimer;   // обновляет строку маршрутов, пока подключены
     private bool _bootstrap;     // текущие _profiles — это маршруты активации (своих ещё нет)
     private volatile bool _subPulled;  // подписку по туннелю тянем один раз за подключение
 
@@ -81,7 +83,16 @@ public class MainForm : Form
         _power.Cursor = Cursors.Hand;
         _power.Click += (_, _) => Toggle();
 
-        Controls.AddRange(new Control[] { _gear, _status, _power });
+        _routes.Text = "";
+        _routes.ForeColor = Color.FromArgb(120, 125, 135);
+        _routes.BackColor = Color.Transparent;
+        _routes.Font = new Font("Segoe UI", 9);
+        _routes.TextAlign = ContentAlignment.MiddleCenter;
+        _routes.Location = new Point(30, 358);
+        _routes.Size = new Size(300, 56);
+        _routes.Visible = false;
+
+        Controls.AddRange(new Control[] { _gear, _status, _power, _routes });
 
         _tray.Text = "QartzVPN";
         _tray.Icon = appIcon ?? SystemIcons.Shield;
@@ -247,6 +258,7 @@ public class MainForm : Form
             _status.ForeColor = Color.FromArgb(30, 110, 114);
             _tray.Text = "QartzVPN — подключено";
             StartHeartbeat();
+            StartRouteTimer();
             if (!_subPulled) { _subPulled = true; PullSubOverTunnel(); }
         }
         else
@@ -256,6 +268,7 @@ public class MainForm : Form
             _status.ForeColor = Color.FromArgb(109, 112, 118);
             _tray.Text = "QartzVPN — отключено";
             StopHeartbeat();
+            StopRouteTimer();
         }
     }
 
@@ -283,6 +296,51 @@ public class MainForm : Form
     {
         try { _heartbeat?.Dispose(); } catch { }
         _heartbeat = null;
+    }
+
+    // ---------- строка маршрутов (как на Android: «через <шлюз> · <proto> / живых: X/Y») ----------
+
+    private void StartRouteTimer()
+    {
+        StopRouteTimer();
+        _routeTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+        _routeTimer.Tick += (_, _) => UpdateRoutes();
+        _routeTimer.Start();
+        UpdateRoutes();
+    }
+
+    private void StopRouteTimer()
+    {
+        try { _routeTimer?.Stop(); _routeTimer?.Dispose(); } catch { }
+        _routeTimer = null;
+        _routes.Visible = false;
+    }
+
+    // Читает снимок RouteHealth менеджера (его наполняет censu-скан по всем маршрутам) и показывает,
+    // через какой шлюз/протокол идём и сколько маршрутов живо. Пока скан не прошёл первый круг —
+    // будет 1/1 (только активный), затем подтянутся остальные.
+    private void UpdateRoutes()
+    {
+        if (!_connected)
+        {
+            _routes.Visible = false;
+            return;
+        }
+        var rs = _mgr.RouteHealth();
+        int total = rs.Count;
+        int up = rs.Count(r => r.up);
+        string name = _mgr.ActiveName ?? "";
+        string? proto = _mgr.ActiveProto;
+        string head = name.Length == 0 ? "" : (proto != null ? $"{name} · {proto}" : name);
+
+        string text;
+        if (total > 0 && head.Length > 0) text = $"через {head}\nживых маршрутов: {up}/{total}";
+        else if (total > 0) text = $"живых маршрутов: {up}/{total}";
+        else if (head.Length > 0) text = $"через {head}";
+        else text = "";
+
+        _routes.Text = text;
+        _routes.Visible = text.Length > 0;
     }
 
     private void SendHeartbeat()

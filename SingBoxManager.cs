@@ -53,6 +53,15 @@ public class SingBoxManager
     public bool IsRunning => _main is { HasExited: false } || _provider is { HasExited: false };
     public string? ActiveName => _active?.Name;
 
+    // протокол активного маршрута для подписи в UI (vless/hysteria2/awg)
+    public string? ActiveProto => _active == null ? null : _active.Kind switch
+    {
+        ProfileKind.Vless => "vless",
+        ProfileKind.Hysteria2 => "hysteria2",
+        ProfileKind.Awg => "awg",
+        _ => null,
+    };
+
     /// <summary>Снимок health кандидатов: имя шлюза → поднялся ли при последней проверке.</summary>
     public List<(string name, bool up)> RouteHealth()
     {
