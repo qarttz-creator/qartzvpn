@@ -48,7 +48,10 @@ public class SingBoxManager
 
     // телеметрия доступности маршрутов (для /hb → панель)
     private readonly object _healthGate = new();
-    private readonly Dictionary<string, bool> _routeHealth = new();
+    // Ключ — УНИКАЛЬНЫЙ идентификатор маршрута (kind|host:port; /sub дедупит по host:port, так что он
+    // уникален), значение — отображаемое имя + живость. Ключуем НЕ по имени: у AWG имена часто
+    // совпадают (все "AmneziaWG"), и ключ по имени схлопывал бы все амнезии в одну запись.
+    private readonly Dictionary<string, (string name, bool up)> _routeHealth = new();
 
     public bool IsRunning => _main is { HasExited: false } || _provider is { HasExited: false };
     public string? ActiveName => _active?.Name;
@@ -62,15 +65,33 @@ public class SingBoxManager
         _ => null,
     };
 
-    /// <summary>Снимок health кандидатов: имя шлюза → поднялся ли при последней проверке.</summary>
+    /// <summary>Снимок health всех маршрутов: отображаемое имя → поднялся ли при последней проверке.</summary>
     public List<(string name, bool up)> RouteHealth()
     {
-        lock (_healthGate) return _routeHealth.Select(kv => (kv.Key, kv.Value)).ToList();
+        lock (_healthGate) return _routeHealth.Values.ToList();
     }
 
-    private void SetHealth(string name, bool up)
+    // Уникальный ключ маршрута: host:port инбаунда уникален (разные транспорты = разные порты),
+    // плюс Kind для надёжности. Именно по нему ключуем health, чтобы ничего не схлопывалось.
+    private static string RouteKey(VlessProfile p) => $"{p.Kind}|{p.Host}:{p.Port}";
+
+    // Отображаемое имя маршрута для /hb → панель: имя шлюза + протокол (vless/hysteria2/awg),
+    // чтобы разные транспорты одного шлюза различались в админке.
+    private static string RouteLabel(VlessProfile p)
     {
-        lock (_healthGate) _routeHealth[name] = up;
+        var proto = p.Kind switch
+        {
+            ProfileKind.Vless => "vless",
+            ProfileKind.Hysteria2 => "hysteria2",
+            ProfileKind.Awg => "awg",
+            _ => "",
+        };
+        return proto.Length > 0 ? $"{p.Name} · {proto}" : p.Name;
+    }
+
+    private void SetHealth(VlessProfile p, bool up)
+    {
+        lock (_healthGate) _routeHealth[RouteKey(p)] = (RouteLabel(p), up);
     }
 
     public SingBoxManager()
@@ -496,12 +517,12 @@ public class SingBoxManager
                 _ => StartXrayProvider(p),
             };
             if (_userStopped) { Teardown(); return; }
-            if (!up) { SetHealth(p.Name, false); StopProvider(); continue; }
+            if (!up) { SetHealth(p, false); StopProvider(); continue; }
 
-            if (!ProbeOk(8000, 2)) { SetHealth(p.Name, false); L($"'{p.Name}': сквозная проверка не прошла."); StopProvider(); continue; }
+            if (!ProbeOk(8000, 2)) { SetHealth(p, false); L($"'{p.Name}': сквозная проверка не прошла."); StopProvider(); continue; }
             if (_userStopped) { Teardown(); return; }
 
-            SetHealth(p.Name, true);
+            SetHealth(p, true);
             _active = p;
             _probeFails = 0;
             L($"Подключено через '{p.Name}'.");
@@ -640,22 +661,22 @@ public class SingBoxManager
         if (cands == null || cands.Count == 0) return;
         var active = _active;
 
-        var names = new HashSet<string>();
+        var keys = new HashSet<string>();
         foreach (var p in cands)
         {
             if (_userStopped || _connecting) return;
             if (!(_main is { HasExited: false })) return;
-            names.Add(p.Name);
+            keys.Add(RouteKey(p));
 
             // активный маршрут держит watchdog — он заведомо жив, не трогаем его порт
-            if (active != null && ReferenceEquals(p, active)) { SetHealth(p.Name, true); continue; }
+            if (active != null && ReferenceEquals(p, active)) { SetHealth(p, true); continue; }
 
-            SetHealth(p.Name, CensusProbeRoute(p));
+            SetHealth(p, CensusProbeRoute(p));
         }
 
-        // убрать из health шлюзы, которых больше нет в списке (сменилась подписка)
+        // убрать из health маршруты, которых больше нет в списке (сменилась подписка)
         lock (_healthGate)
-            foreach (var k in _routeHealth.Keys.Where(k => !names.Contains(k)).ToList())
+            foreach (var k in _routeHealth.Keys.Where(k => !keys.Contains(k)).ToList())
                 _routeHealth.Remove(k);
     }
 

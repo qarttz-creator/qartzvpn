@@ -59,13 +59,19 @@ public class VlessProfile
         var ep = AwgConfig.ParseIni(ini, "awg")
             ?? throw new FormatException("не удалось разобрать конфиг AmneziaWG");
         var peer = (ep["peers"] as JsonArray) is { Count: > 0 } arr ? arr[0]!.AsObject() : null;
+        // Имя берём из #fragment ссылки (сервер проставляет туда имя шлюза), иначе все AWG-маршруты
+        // назывались бы одинаково "AmneziaWG" и схлопывались бы в один. FromLink фрагмент отбрасывает,
+        // поэтому достаём его из raw здесь.
+        string name = "AmneziaWG";
+        int h = raw.LastIndexOf('#');
+        if (h >= 0 && h < raw.Length - 1) name = Uri.UnescapeDataString(raw[(h + 1)..]);
         return new VlessProfile
         {
             Raw = raw,
             Kind = ProfileKind.Awg,
             Host = (string?)peer?["address"] ?? "",
             Port = peer?["port"] is JsonNode pn ? (int)pn : 0,
-            Name = "AmneziaWG",
+            Name = name,
             AwgEndpoint = ep,
         };
     }
