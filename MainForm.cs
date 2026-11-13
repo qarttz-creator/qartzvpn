@@ -14,6 +14,7 @@ public class MainForm : Form
     private bool _connected;
     private System.Threading.Timer? _heartbeat;
     private System.Threading.Timer? _subTimer;  // периодический ре-пулл /sub по туннелю (раз в ~6ч)
+    private long _resubSeen = 0;                 // последняя обработанная эпоха push-подписки (resub_at из /hb)
     private bool _autostartMode;
     private System.Windows.Forms.Timer? _poll;
     private System.Windows.Forms.Timer? _routeTimer;   // обновляет строку маршрутов, пока подключены
@@ -365,7 +366,14 @@ public class MainForm : Form
     private void SendHeartbeat()
     {
         var st = Settings.Load();
-        Heartbeat.Send(st.ControlBase(), st.Token(), Updater.CurrentVersion, _mgr.ActiveName ?? "", _mgr.RouteHealth());
+        long resubAt = Heartbeat.Send(st.ControlBase(), st.Token(), Updater.CurrentVersion, _mgr.ActiveName ?? "", _mgr.RouteHealth());
+        if (resubAt <= 0) return;
+        // Push-подписка: сервер отдал эпоху «раздать всем». Первое ненулевое значение после запуска
+        // просто запоминаем (на свежем коннекте подписка и так уже перечитана). Дальше, если оператор
+        // в админке нажал «раздать всем» (эпоха выросла), перечитываем /sub по туннелю. Реконнект
+        // внутри PullSubOverTunnel произойдёт только если подписка реально изменилась.
+        if (_resubSeen == 0) { _resubSeen = resubAt; return; }
+        if (resubAt > _resubSeen) { _resubSeen = resubAt; PullSubOverTunnel(); }
     }
 
     /// <summary>

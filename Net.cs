@@ -70,4 +70,20 @@ static class Net
         }
         catch { /* best-effort */ }
     }
+
+    /// <summary>POST JSON через туннель и вернуть тело ответа (для /hb: сервер отдаёт resub_at).
+    /// null при ошибке/не-2xx — вызывающий трактует это как «нет сигнала».</summary>
+    public static string? PostViaTunnelResp(string url, string json, int timeoutMs = 6000)
+    {
+        try
+        {
+            using var http = new HttpClient(SocksHandler(TimeSpan.FromMilliseconds(5000)))
+            { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
+            using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            var r = http.PostAsync(url, content).GetAwaiter().GetResult();
+            if (!r.IsSuccessStatusCode) return null;
+            return r.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        }
+        catch { return null; }
+    }
 }

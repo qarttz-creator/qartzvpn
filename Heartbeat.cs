@@ -6,10 +6,12 @@ namespace QarttzVPN;
 /// along with per-route health (which gateways are up) — ЧЕРЕЗ ТУННЕЛЬ, как и подписка.</summary>
 static class Heartbeat
 {
-    public static void Send(string controlBase, string token, string version, string gateway,
+    /// <summary>Отправляет хартбит и возвращает серверную эпоху ре-пулла (resub_at), либо 0, если
+    /// сигнала/ответа нет. Вызывающий сравнивает её со своим resub_seen: серверная новее ⇒ перечитать /sub.</summary>
+    public static long Send(string controlBase, string token, string version, string gateway,
                             IEnumerable<(string name, bool up)> routes)
     {
-        if (string.IsNullOrEmpty(controlBase) || string.IsNullOrEmpty(token)) return;
+        if (string.IsNullOrEmpty(controlBase) || string.IsNullOrEmpty(token)) return 0;
         var routesArr = new JsonArray();
         foreach (var (name, up) in routes)
             routesArr.Add(new JsonObject { ["name"] = name, ["up"] = up });
@@ -24,6 +26,13 @@ static class Heartbeat
         }.ToJsonString();
 
         // по туннелю: /hb host обычно закрыт в открытом интернете на враждебной сети
-        Net.PostViaTunnel(controlBase.TrimEnd('/') + "/hb", body);
+        var resp = Net.PostViaTunnelResp(controlBase.TrimEnd('/') + "/hb", body);
+        if (string.IsNullOrWhiteSpace(resp)) return 0;
+        try
+        {
+            var node = JsonNode.Parse(resp);
+            return node?["resub_at"]?.GetValue<long>() ?? 0;
+        }
+        catch { return 0; }
     }
 }
