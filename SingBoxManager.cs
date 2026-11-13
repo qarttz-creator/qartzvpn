@@ -666,13 +666,10 @@ public class SingBoxManager
     private void StartCensus()
     {
         StopCensus();
-        // Пока только инженерная сборка (валидация). Причина: раньше скан AWG шёл с auto_detect_interface
-        // и конфликтовал с настройкой главного TUN (strict_route) → main падал на 15-й секунде
-        // (configure tun interface …) и уходил в цикл переподключений. Теперь скан-конфиг AWG БЕЗ
-        // auto_detect_interface (BuildAwgScanConfig) — конфликт устранён. Держим census в dev, проверяем
-        // стабильность на Windows; как подтвердится — снять этот гейт, чтобы телеметрия неактивных
-        // маршрутов вернулась и клиентам. Связь и без census самодостаточна (failover в ConnectLoop).
-        if (!Build.DevTools) return;
+        // Скан включён во всех сборках. Раньше он ронял главный TUN, но причиной был
+        // auto_detect_interface в скан-конфиге AWG (конфликт с strict_route главного TUN → падение main
+        // на 15-й секунде). Устранено в BuildAwgScanConfig (скан AWG без auto_detect_interface);
+        // проверено на Windows — TUN держит, health неактивных маршрутов возвращается в /hb → панель.
         _census = new System.Threading.Timer(_ => CensusTick(), null, 12000, 75000);
     }
 
