@@ -656,6 +656,12 @@ public class SingBoxManager
     private void StartCensus()
     {
         StopCensus();
+        // Только инженерная сборка. В клиенте census ОТКЛЮЧЁН: на Windows параллельные sing-box-ядра
+        // скана (особенно AWG с auto_detect_interface) конфликтовали с настройкой главного TUN
+        // (strict_route), из-за чего main падал на 15-й секунде (configure tun interface …) и уходил в
+        // цикл переподключений. Телеметрия «какие неактивные маршруты живы» не стоит потери связи —
+        // клиент и так сам делает failover в ConnectLoop.
+        if (!Build.DevTools) return;
         _census = new System.Threading.Timer(_ => CensusTick(), null, 12000, 75000);
     }
 
