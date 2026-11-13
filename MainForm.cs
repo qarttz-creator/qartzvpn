@@ -366,7 +366,8 @@ public class MainForm : Form
     private void SendHeartbeat()
     {
         var st = Settings.Load();
-        long resubAt = Heartbeat.Send(st.ControlBase(), st.Token(), Updater.CurrentVersion, _mgr.ActiveName ?? "", _mgr.RouteHealth());
+        long resubAt = Heartbeat.Send(st.ControlBase(), st.Token(), Settings.GetOrCreateDeviceId(), Environment.MachineName,
+                                      Updater.CurrentVersion, _mgr.ActiveName ?? "", _mgr.RouteHealth());
         if (resubAt <= 0) return;
         // Push-подписка: сервер отдал эпоху «раздать всем». Первое ненулевое значение после запуска
         // просто запоминаем (на свежем коннекте подписка и так уже перечитана). Дальше, если оператор

@@ -15,6 +15,7 @@ public class Settings
     public bool DomainFilter = false; // route a user-defined list of domains straight out (bypass VPN)
     public bool RuDirect = true;   // route RU domains (.ru/.рф/.su) straight out, bypassing the VPN
     public string SubUrl = "";   // subscription link from the admin (https://…/sub?token=…)
+    public string DeviceId = ""; // стабильный id установки (генерится один раз) — для учёта устройств в панели
 
     private static string PathOf => System.IO.Path.Combine(AppContext.BaseDirectory, "settings.json");
 
@@ -33,6 +34,7 @@ public class Settings
                     DomainFilter = (bool?)o["domainFilter"] ?? false,
                     RuDirect   = (bool?)o["ruDirect"]   ?? true,
                     SubUrl     = (string?)o["subUrl"]   ?? "",
+                    DeviceId   = (string?)o["deviceId"] ?? "",
                 };
             }
         }
@@ -50,8 +52,22 @@ public class Settings
             ["domainFilter"] = DomainFilter,
             ["ruDirect"]   = RuDirect,
             ["subUrl"]     = SubUrl,
+            ["deviceId"]   = DeviceId,
         };
         try { File.WriteAllText(PathOf, o.ToJsonString(Json.Opts)); } catch { }
+    }
+
+    /// <summary>Стабильный id этой установки для учёта устройств в панели. Генерится один раз и
+    /// сохраняется в settings.json; дальше не меняется (переживает смену IP/сети).</summary>
+    public static string GetOrCreateDeviceId()
+    {
+        var s = Load();
+        if (string.IsNullOrEmpty(s.DeviceId))
+        {
+            s.DeviceId = Guid.NewGuid().ToString("N");
+            s.Save();
+        }
+        return s.DeviceId;
     }
 
     /// <summary>Token embedded in the subscription URL (?token=…), used for heartbeats.</summary>

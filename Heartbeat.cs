@@ -8,8 +8,8 @@ static class Heartbeat
 {
     /// <summary>Отправляет хартбит и возвращает серверную эпоху ре-пулла (resub_at), либо 0, если
     /// сигнала/ответа нет. Вызывающий сравнивает её со своим resub_seen: серверная новее ⇒ перечитать /sub.</summary>
-    public static long Send(string controlBase, string token, string version, string gateway,
-                            IEnumerable<(string name, bool up)> routes)
+    public static long Send(string controlBase, string token, string deviceId, string deviceName,
+                            string version, string gateway, IEnumerable<(string name, bool up)> routes)
     {
         if (string.IsNullOrEmpty(controlBase) || string.IsNullOrEmpty(token)) return 0;
         var routesArr = new JsonArray();
@@ -19,6 +19,8 @@ static class Heartbeat
         var body = new JsonObject
         {
             ["token"] = token,
+            ["device_id"] = deviceId ?? "",
+            ["device_name"] = deviceName ?? "",
             ["version"] = version,
             ["gateway"] = gateway ?? "",
             ["platform"] = "windows",
