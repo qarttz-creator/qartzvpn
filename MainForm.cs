@@ -429,10 +429,16 @@ public class MainForm : Form
 
     private void PromptUpdate(Updater.Remote r)
     {
-        var ans = MessageBox.Show(
-            $"Доступна новая версия: {r.Version}\nТекущая: {Updater.CurrentVersion}\n\nОбновить сейчас?",
-            "Обновление QartzVPN", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
-        if (ans != DialogResult.Yes) return;
+        bool forced = Updater.IsForced(r);
+        var body = $"Доступна новая версия: {r.Version}\nТекущая: {Updater.CurrentVersion}";
+        if (!string.IsNullOrWhiteSpace(r.Notes)) body += $"\n\nЧто нового:\n{r.Notes}";
+        body += forced
+            ? "\n\nЭто обязательное обновление — без него подключение может не работать."
+            : "\n\nОбновить сейчас?";
+        // Обязательное (critical / версия ниже min_supported) — без «Позже»: только OK, и ставим тихо.
+        var ans = MessageBox.Show(body, "Обновление QartzVPN",
+            forced ? MessageBoxButtons.OK : MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+        if (!forced && ans != DialogResult.Yes) return;
 
         _status.Text = "Загрузка обновления…"; _status.ForeColor = Color.FromArgb(154, 107, 22);
         Task.Run(() =>
@@ -443,7 +449,7 @@ public class MainForm : Form
             {
                 if (path == null) { Info("Не удалось скачать обновление."); return; }
                 _mgr.Stop();
-                Updater.RunInstallerAndExit(path);
+                Updater.RunInstallerAndExit(path, silent: forced);
             });
         });
     }

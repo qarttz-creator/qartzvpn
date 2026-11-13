@@ -15,7 +15,7 @@ static class Updater
     private const string VersionUrl =
         "https://github.com/qarttz-creator/qartzvpn/releases/download/desktop-latest/version.json";
 
-    public record Remote(string Version, string Url);
+    public record Remote(string Version, string Url, string Notes, bool Critical, string MinSupported);
 
     public static string CurrentVersion
     {
@@ -40,9 +40,23 @@ static class Updater
             var ver = (string?)o["version"] ?? "";
             var url = (string?)o["url"] ?? "";
             if (ver.Length == 0 || url.Length == 0) return null;
-            return new Remote(ver, url);
+            var notes = (string?)o["notes"] ?? "";
+            var critical = (bool?)o["critical"] ?? false;
+            var minSup = (string?)o["min_supported"] ?? "";
+            return new Remote(ver, url, notes, critical, minSup);
         }
         catch { return null; }
+    }
+
+    /// <summary>Обновление обязательно: помечено critical, либо текущая версия ниже min_supported
+    /// (ретайрим сломанные сборки). Тогда в диалоге не будет «Позже».</summary>
+    public static bool IsForced(Remote r)
+    {
+        if (r.Critical) return true;
+        if (!string.IsNullOrWhiteSpace(r.MinSupported)
+            && TryVer(r.MinSupported, out var min) && TryVer(CurrentVersion, out var cur))
+            return cur < min;
+        return false;
     }
 
     private static string? FetchDirect(string url)
@@ -96,10 +110,13 @@ static class Updater
         catch { return null; }
     }
 
-    /// <summary>Launch the installer (UAC elevated) and quit so the running exe unlocks for upgrade.</summary>
-    public static void RunInstallerAndExit(string setupPath)
+    /// <summary>Launch the installer (UAC elevated) and quit so the running exe unlocks for upgrade.
+    /// silent=true (для critical) запускает Inno-установщик без мастера: /VERYSILENT /NORESTART.</summary>
+    public static void RunInstallerAndExit(string setupPath, bool silent = false)
     {
-        Process.Start(new ProcessStartInfo { FileName = setupPath, UseShellExecute = true });
+        var psi = new ProcessStartInfo { FileName = setupPath, UseShellExecute = true };
+        if (silent) psi.Arguments = "/VERYSILENT /NORESTART /SUPPRESSMSGBOXES";
+        Process.Start(psi);
         Application.Exit();
     }
 }

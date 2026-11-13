@@ -16,6 +16,13 @@ on:
         description: 'Инженерная сборка (открытый лог, dev-инструменты). Иначе клиентская (закрыто).'
         type: boolean
         default: false
+      critical:
+        description: 'Обязательное обновление: у клиента не будет «Позже», установка тихая.'
+        type: boolean
+        default: false
+      min_supported:
+        description: 'Минимальная поддерживаемая версия (например 1.0.5). Клиенты ниже обновляются принудительно. Пусто → без принуждения.'
+        default: ''
       activation_url:
         description: 'URL /activation контрол-плейна для запекания стартовых маршрутов. Пусто → переменная ACTIVATION_URL, иначе seed из репозитория.'
         default: ''
@@ -142,10 +149,26 @@ jobs:
 
       - name: Сгенерировать version.json
         shell: pwsh
+        env:
+          UPD_CRITICAL: ${{ github.event.inputs.critical }}
+          UPD_MIN_SUPPORTED: ${{ github.event.inputs.min_supported }}
         run: |
+          # notes = верхняя секция CHANGELOG.md (единый источник «что нового»).
+          $notes = ''
+          if (Test-Path CHANGELOG.md) {
+            $inBlock = $false; $buf = @()
+            foreach ($l in (Get-Content CHANGELOG.md)) {
+              if ($l -match '^##\s+') { if ($inBlock) { break } else { $inBlock = $true; continue } }
+              if ($inBlock) { $buf += $l }
+            }
+            $notes = ($buf -join "`n").Trim()
+          }
           $meta = [ordered]@{
-            version = '${{ steps.ver.outputs.numver }}'
-            url     = 'https://github.com/qarttz-creator/qartzvpn/releases/download/desktop-latest/QarttzVPN-Setup.exe'
+            version       = '${{ steps.ver.outputs.numver }}'
+            url           = 'https://github.com/qarttz-creator/qartzvpn/releases/download/desktop-latest/QarttzVPN-Setup.exe'
+            notes         = $notes
+            critical      = ($env:UPD_CRITICAL -eq 'true')
+            min_supported = ($env:UPD_MIN_SUPPORTED)
           }
           $meta | ConvertTo-Json | Out-File -Encoding utf8 installer\output\version.json
           Get-Content installer\output\version.json
