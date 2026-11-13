@@ -355,11 +355,21 @@ public class SingBoxManager
     /// from the amnezia-box fork with -tags with_awg (the CI build does exactly this).</summary>
     private void BuildAwgProviderConfig(VlessProfile profile) => BuildAwgProviderConfig(profile, SocksPort, AwgConfigPath);
 
-    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath)
+    // Скан-вариант для census (сигнатура под Action<VlessProfile,int,string>): БЕЗ auto_detect_interface.
+    private void BuildAwgScanConfig(VlessProfile profile, int port, string outPath)
+        => BuildAwgProviderConfig(profile, port, outPath, scan: true);
+
+    private void BuildAwgProviderConfig(VlessProfile profile, int port, string outPath, bool scan = false)
     {
         var ep = profile.AwgEndpoint?.DeepClone().AsObject()
             ?? throw new InvalidOperationException("нет awg-endpoint в профиле");
         var tag = (string?)ep["tag"] ?? "awg";
+        var route = new JsonObject { ["final"] = tag };
+        // auto_detect_interface заставляет ядро мониторить/привязываться к дефолтному интерфейсу Windows.
+        // Для СКАНА он не нужен (IP шлюза и так идёт напрямую через bypass главного TUN) и ВРЕДЕН: лезет в
+        // маршруты/интерфейс параллельно с настройкой главного TUN (strict_route) → тот падает на 15-й сек.
+        // Поэтому в скане опускаем; у живого провайдера оставляем (критичный транспорт, не трогаем).
+        if (!scan) route["auto_detect_interface"] = true;
         var cfg = new JsonObject
         {
             ["log"] = new JsonObject { ["level"] = "warn" },
@@ -369,10 +379,10 @@ public class SingBoxManager
             },
             ["endpoints"] = new JsonArray { ep },
             ["outbounds"] = new JsonArray { new JsonObject { ["type"] = "direct", ["tag"] = "direct" } },
-            ["route"] = new JsonObject { ["final"] = tag, ["auto_detect_interface"] = true },
+            ["route"] = route,
         };
         File.WriteAllText(outPath, cfg.ToJsonString(Json.Opts));
-        L($"awg-провайдер '{profile.Name}' ({profile.Host}:{profile.Port}).");
+        L($"awg-{(scan ? "скан" : "провайдер")} '{profile.Name}' ({profile.Host}:{profile.Port}).");
     }
 
     // ---------- process helpers ----------
@@ -656,11 +666,12 @@ public class SingBoxManager
     private void StartCensus()
     {
         StopCensus();
-        // Только инженерная сборка. В клиенте census ОТКЛЮЧЁН: на Windows параллельные sing-box-ядра
-        // скана (особенно AWG с auto_detect_interface) конфликтовали с настройкой главного TUN
-        // (strict_route), из-за чего main падал на 15-й секунде (configure tun interface …) и уходил в
-        // цикл переподключений. Телеметрия «какие неактивные маршруты живы» не стоит потери связи —
-        // клиент и так сам делает failover в ConnectLoop.
+        // Пока только инженерная сборка (валидация). Причина: раньше скан AWG шёл с auto_detect_interface
+        // и конфликтовал с настройкой главного TUN (strict_route) → main падал на 15-й секунде
+        // (configure tun interface …) и уходил в цикл переподключений. Теперь скан-конфиг AWG БЕЗ
+        // auto_detect_interface (BuildAwgScanConfig) — конфликт устранён. Держим census в dev, проверяем
+        // стабильность на Windows; как подтвердится — снять этот гейт, чтобы телеметрия неактивных
+        // маршрутов вернулась и клиентам. Связь и без census самодостаточна (failover в ConnectLoop).
         if (!Build.DevTools) return;
         _census = new System.Threading.Timer(_ => CensusTick(), null, 12000, 75000);
     }
@@ -724,7 +735,7 @@ public class SingBoxManager
             started = p.Kind switch
             {
                 ProfileKind.Hysteria2 => StartCensusProvider(p, BuildHyProviderConfig, SingBoxPath, CensusHyPath, Path.Combine(_baseDir, "core"), checkTcp: false),
-                ProfileKind.Awg       => StartCensusProvider(p, BuildAwgProviderConfig, SingBoxPath, CensusAwgPath, Path.Combine(_baseDir, "core"), checkTcp: false),
+                ProfileKind.Awg       => StartCensusProvider(p, BuildAwgScanConfig, SingBoxPath, CensusAwgPath, Path.Combine(_baseDir, "core"), checkTcp: false),
                 _                     => StartCensusProvider(p, BuildXrayConfig, XrayPath, CensusXrayPath, _baseDir, checkTcp: true),
             };
         }
