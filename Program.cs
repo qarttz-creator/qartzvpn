@@ -35,7 +35,8 @@ static class Program
 
         // Heartbeat (с health маршрутов) so autostart clients also show online in the admin.
         using var hb = new System.Threading.Timer(
-            _ => Heartbeat.Send(st.ControlBase(), st.Token(), Updater.CurrentVersion, mgr.ActiveName ?? "", mgr.RouteHealth()),
+            _ => Heartbeat.Send(st.ControlBase(), st.Token(), Settings.GetOrCreateDeviceId(), Environment.MachineName,
+                                Updater.CurrentVersion, mgr.ActiveName ?? "", mgr.RouteHealth()),
             null, 15000, 60000);
 
         // Как только туннель встал — тянем свою подписку ПО ТУННЕЛЮ и переключаемся на свои маршруты.
