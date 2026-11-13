@@ -607,11 +607,20 @@ public class SingBoxManager
         if (_userStopped || _connecting) return;
         if (!(_main is { HasExited: false })) { HealthLost("TUN упал"); return; }
         if (!(_provider is { HasExited: false })) { HealthLost("провайдер упал"); return; }
-        if (Probe(6000)) { _probeFails = 0; return; }
+        // Живой шлюз не бросаем из-за одного сбоя пробы: кратковременная потеря/нагрузка (в т.ч. фоновый
+        // census) или троттлинг одного хоста — не повод рвать рабочее соединение. Подтверждаем двумя
+        // запросами к двум разным хостам и терпим до 3 тиков подряд (~75с), прежде чем переподключаться.
+        if (WatchdogProbe()) { _probeFails = 0; return; }
         _probeFails++;
-        L($"Health-check не прошёл ({_probeFails}/2).");
-        if (_probeFails >= 2) { _probeFails = 0; HealthLost("нет ответа через туннель"); }
+        L($"Health-check не прошёл ({_probeFails}/3).");
+        if (_probeFails >= 3) { _probeFails = 0; HealthLost("нет ответа через туннель"); }
     }
+
+    // Терпимая проба живого туннеля: любой из двух независимых хостов ответил ⇒ туннель жив.
+    // Два хоста, чтобы точечный троттлинг/блокировка одного не читались как «связь потеряна».
+    private bool WatchdogProbe()
+        => Probe(4000, SocksPort, "http://www.gstatic.com/generate_204", anyResponse: false)
+        || Probe(4000, SocksPort, "http://cp.cloudflare.com/generate_204", anyResponse: false);
 
     private void OnProcDied(string label)
     {
@@ -632,7 +641,9 @@ public class SingBoxManager
         _active = null;
         StateChanged?.Invoke(false);
         Status?.Invoke("Переподключение…");
-        BeginConnect(cands, _autoSwitch, idx < 0 ? 0 : (idx + 1) % Math.Max(cands.Count, 1));
+        // Сначала пробуем ТОТ ЖЕ шлюз (idx), а не следующий: если он просто моргнул, остаёмся на нём.
+        // ConnectLoop сам переберёт остальные по кругу, только если текущий не поднимется.
+        BeginConnect(cands, _autoSwitch, idx < 0 ? 0 : idx);
     }
 
     // ---------- census: фоновый скан ВСЕХ маршрутов ----------
@@ -666,6 +677,7 @@ public class SingBoxManager
     {
         if (_userStopped || _connecting) return;
         if (!(_main is { HasExited: false })) return;     // смысл только при поднятом TUN
+        if (_probeFails > 0) return;                      // туннель сейчас шаткий — не грузим его сканом
         lock (_censusGate) { if (_censusRunning) return; _censusRunning = true; }
         try { CensusScan(); }
         catch (Exception ex) { L("census: " + ex.Message); }
