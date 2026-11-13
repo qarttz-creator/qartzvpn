@@ -101,6 +101,7 @@ public class MainForm : Form
         menu.Items.Add("Показать окно", null, (_, _) => ShowWindow());
         menu.Items.Add("Подключить / Отключить", null, (_, _) => Toggle());
         menu.Items.Add("Проверить обновление", null, (_, _) => CheckForUpdate(manual: true));
+        menu.Items.Add("Отправить лог", null, (_, _) => ExportLog());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Выход", null, (_, _) => ExitApp());
         _tray.ContextMenuStrip = menu;
@@ -485,6 +486,23 @@ public class MainForm : Form
     // ---------- окно / выход ----------
 
     private void ShowWindow() { Show(); WindowState = FormWindowState.Normal; Activate(); }
+
+    // Шифрует лог из памяти нашим публичным ключом и кладёт .enc на Рабочий стол — безопасно отправить
+    // в поддержку. Расшифровать может только держатель приватного ключа (мы, инструментом qartzlog).
+    private void ExportLog()
+    {
+        try
+        {
+            var path = LogExport.ExportToDesktop(_mgr.LogSnapshot());
+            MessageBox.Show($"Зашифрованный лог сохранён:\n{path}\n\nОтправьте этот файл в поддержку.",
+                "QartzVPN", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Не удалось сохранить лог: " + ex.Message,
+                "QartzVPN", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
 
     private void OnClosing(object? s, FormClosingEventArgs e)
     {

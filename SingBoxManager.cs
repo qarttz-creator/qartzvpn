@@ -27,6 +27,11 @@ public class SingBoxManager
     private Process? _provider;   // xray (vless) or sing-box (hysteria) on 24808
     private readonly string _baseDir;
     private readonly string _logPath;
+    // Кольцевой буфер лога в памяти. В клиентской сборке на диск ничего не пишем — наружу лог уходит
+    // только зашифрованным (LogExport); буфер и есть источник для экспорта.
+    private readonly System.Collections.Generic.Queue<string> _logBuf = new();
+    private readonly object _logGate = new();
+    private const int LogBufMax = 5000;
     private const int SocksPort = 24808;
     private const int CensusPort = 24809;   // scratch-порт для фонового скана маршрутов
 
@@ -98,14 +103,22 @@ public class SingBoxManager
     {
         _baseDir = AppContext.BaseDirectory;
         _logPath = Path.Combine(_baseDir, "qvpn.log");
-        try { File.AppendAllText(_logPath, $"==== {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====" + Environment.NewLine); } catch { }
+        if (Build.DevTools) { try { File.AppendAllText(_logPath, $"==== {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====" + Environment.NewLine); } catch { } }
         AppDomain.CurrentDomain.ProcessExit += (_, _) => Stop();
     }
 
     private void L(string s)
     {
-        try { File.AppendAllText(_logPath, $"{DateTime.Now:HH:mm:ss} {s}{Environment.NewLine}"); } catch { }
+        var line = $"{DateTime.Now:HH:mm:ss} {s}";
+        lock (_logGate) { _logBuf.Enqueue(line); while (_logBuf.Count > LogBufMax) _logBuf.Dequeue(); }
+        if (Build.DevTools) { try { File.AppendAllText(_logPath, line + Environment.NewLine); } catch { } }
         Log?.Invoke(s);
+    }
+
+    /// <summary>Снимок лога из памяти — источник для зашифрованного экспорта (LogExport).</summary>
+    public string LogSnapshot()
+    {
+        lock (_logGate) return string.Join(Environment.NewLine, _logBuf);
     }
 
     private string XrayPath        => Path.Combine(_baseDir, "core", "xray.exe");

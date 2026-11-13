@@ -12,6 +12,10 @@ on:
         description: 'Создать релиз в Releases (иначе только артефакт)'
         type: boolean
         default: false
+      dev:
+        description: 'Инженерная сборка (открытый лог, dev-инструменты). Иначе клиентская (закрыто).'
+        type: boolean
+        default: false
       activation_url:
         description: 'URL /activation контрол-плейна для запекания стартовых маршрутов. Пусто → переменная ACTIVATION_URL, иначе seed из репозитория.'
         default: ''
@@ -83,7 +87,8 @@ jobs:
         run: >
           dotnet publish QarttzVPN.csproj
           -c Release -r win-x64 --self-contained true
-          -p:PublishSingleFile=true -p:Version=${{ steps.ver.outputs.numver }} -o publish
+          -p:PublishSingleFile=true -p:Version=${{ steps.ver.outputs.numver }}
+          -p:QartzDev=${{ github.event.inputs.dev == 'true' }} -o publish
 
       - name: Скачать ядра xray и sing-box
         shell: pwsh
