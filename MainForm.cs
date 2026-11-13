@@ -13,6 +13,7 @@ public class MainForm : Form
     private readonly List<VlessProfile> _profiles = new();
     private bool _connected;
     private System.Threading.Timer? _heartbeat;
+    private System.Threading.Timer? _subTimer;  // периодический ре-пулл /sub по туннелю (раз в ~6ч)
     private bool _autostartMode;
     private System.Windows.Forms.Timer? _poll;
     private System.Windows.Forms.Timer? _routeTimer;   // обновляет строку маршрутов, пока подключены
@@ -261,6 +262,7 @@ public class MainForm : Form
             StartHeartbeat();
             StartRouteTimer();
             if (!_subPulled) { _subPulled = true; PullSubOverTunnel(); }
+            StartSubTimer();
         }
         else
         {
@@ -270,6 +272,7 @@ public class MainForm : Form
             _tray.Text = "QartzVPN — отключено";
             StopHeartbeat();
             StopRouteTimer();
+            StopSubTimer();
         }
     }
 
@@ -297,6 +300,21 @@ public class MainForm : Form
     {
         try { _heartbeat?.Dispose(); } catch { }
         _heartbeat = null;
+    }
+
+    // Периодический ре-пулл /sub по туннелю (первый — сразу при коннекте, далее раз в ~6ч), чтобы
+    // подключённые клиенты сами подхватывали смену шлюзов без переустановки/реконнекта.
+    private void StartSubTimer()
+    {
+        StopSubTimer();
+        const int sixHours = 6 * 60 * 60 * 1000;
+        _subTimer = new System.Threading.Timer(_ => PullSubOverTunnel(), null, sixHours, sixHours);
+    }
+
+    private void StopSubTimer()
+    {
+        try { _subTimer?.Dispose(); } catch { }
+        _subTimer = null;
     }
 
     // ---------- строка маршрутов (как на Android: «через <шлюз> · <proto> / живых: X/Y») ----------
