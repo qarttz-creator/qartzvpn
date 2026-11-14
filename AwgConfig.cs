@@ -96,7 +96,10 @@ static class AwgConfig
             ["allowed_ips"] = CidrList(peer.GetValueOrDefault("AllowedIPs", "0.0.0.0/0")),
         };
         if (peer.TryGetValue("PresharedKey", out var psk) && psk.Length > 0) peerObj["preshared_key"] = psk;
-        if (int.TryParse(peer.GetValueOrDefault("PersistentKeepalive"), out var pk)) peerObj["persistent_keepalive_interval"] = pk;
+        // Если шлюз не прислал PersistentKeepalive — ставим стандартные 25с: без него простаивающая
+        // AWG-сессия молчит, и роутер/оператор закрывает её UDP-трансляцию (так же, как на Android).
+        peerObj["persistent_keepalive_interval"] =
+            int.TryParse(peer.GetValueOrDefault("PersistentKeepalive"), out var pk) && pk > 0 ? pk : 25;
         ep["peers"] = new JsonArray { peerObj };
         return ep;
     }
