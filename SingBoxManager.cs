@@ -57,6 +57,8 @@ public class SingBoxManager
     // уникален), значение — отображаемое имя + живость. Ключуем НЕ по имени: у AWG имена часто
     // совпадают (все "AmneziaWG"), и ключ по имени схлопывал бы все амнезии в одну запись.
     private readonly Dictionary<string, (string name, bool up)> _routeHealth = new();
+    // Пинг маршрутов (мс, 0 — не прошёл) по тому же ключу — из census и пробы активного; для RouteSteer.
+    private readonly Dictionary<string, int> _routeDelay = new();
 
     public bool IsRunning => _main is { HasExited: false } || _provider is { HasExited: false };
     public string? ActiveName => _active?.Name;
@@ -483,6 +485,7 @@ public class SingBoxManager
     public void StartAuto(List<VlessProfile> profiles)
     {
         _userStopped = false;
+        _seatedByScan = false;
         BeginConnect(new List<VlessProfile>(profiles), autoSwitch: true, startIndex: 0);
     }
 
@@ -652,8 +655,124 @@ public class SingBoxManager
         StateChanged?.Invoke(false);
         Status?.Invoke("Переподключение…");
         // Сначала пробуем ТОТ ЖЕ шлюз (idx), а не следующий: если он просто моргнул, остаёмся на нём.
-        // ConnectLoop сам переберёт остальные по кругу, только если текущий не поднимется.
-        BeginConnect(cands, _autoSwitch, idx < 0 ? 0 : idx);
+        // ConnectLoop сам переберёт остальные по кругу, только если текущий не поднимется — но начиная
+        // с лучшего по правилу посадки (пинг + нагрузка), а не со следующего по списку.
+        var lost = idx >= 0 ? cands[idx] : null;
+        BeginConnect(SeatOrder(cands, lost), _autoSwitch, 0);
+    }
+
+    // ---------- RouteSteer: выбор маршрута по пингу и нагрузке шлюза ----------
+    // Правило (то же, что на Android):
+    //  1. Посадка (первый скан после подключения или текущий умер): живые по возрастанию пинга, первый
+    //     с нагрузкой ≤ 50%; все > 50% — наименее загруженный.
+    //  2. Сел — сидит: нагрузка текущего сама по себе не повод уходить.
+    //  3. Уходим только если сглаженный пинг текущего вырос на ≥ 100 мс и в ≥ 1,5 раза относительно
+    //     посадки — на маршрут с лучшим пингом и нагрузкой ≤ 50%; такого нет — остаёмся.
+    private const int LoadLimit = 50, WorseAbsMs = 100;
+    private const double WorseRatio = 1.5;
+    private bool _seatedByScan;          // первый скан после подключения уже пересадил по правилу 1
+    private string? _seatKey;            // маршрут, для которого копим базу пинга
+    private int _seatBaseline;
+    private readonly Queue<int> _seatRecent = new();
+
+    private void SetDelay(VlessProfile p, int ms) { lock (_healthGate) _routeDelay[RouteKey(p)] = ms; }
+
+    private int DelayOf(VlessProfile p) { lock (_healthGate) return _routeDelay.TryGetValue(RouteKey(p), out var d) ? d : 0; }
+
+    private static int? LoadOf(VlessProfile p) => Heartbeat.LastLoad.TryGetValue(p.Name, out var l) ? l : null;
+
+    private static bool LoadOk(VlessProfile p) => LoadOf(p) is not int l || l <= LoadLimit;
+
+    // время ответа через socks-порт (мс; 0 — не прошёл). Запрос по IP, без резолва — годится и для AWG.
+    private int TimedProbe(int port)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        bool ok = Probe(5000, port, "http://1.1.1.1", anyResponse: true);
+        return ok ? Math.Max(1, (int)sw.ElapsedMilliseconds) : 0;
+    }
+
+    /// <summary>Правило посадки: лучший маршрут или null, если пингов ещё нет.</summary>
+    private VlessProfile? PickSeat(List<VlessProfile> cands)
+    {
+        var alive = cands.Select(p => (p, d: DelayOf(p))).Where(x => x.d > 0).OrderBy(x => x.d).ToList();
+        if (alive.Count == 0) return null;
+        var ok = alive.FirstOrDefault(x => LoadOk(x.p));
+        if (ok.p != null) return ok.p;
+        return alive.OrderBy(x => LoadOf(x.p) ?? 0).First().p;
+    }
+
+    /// <summary>Порядок перебора при переподключении: сначала прежний (вдруг моргнул), затем живые
+    /// не перегруженные по пингу, затем перегруженные по нагрузке, затем без замеров — в исходном порядке.</summary>
+    private List<VlessProfile> SeatOrder(List<VlessProfile> cands, VlessProfile? first)
+    {
+        var rest = cands.Where(p => !ReferenceEquals(p, first)).ToList();
+        var measured = rest.Where(p => DelayOf(p) > 0).ToList();
+        var ordered = measured.Where(LoadOk).OrderBy(DelayOf)
+            .Concat(measured.Where(p => !LoadOk(p)).OrderBy(p => LoadOf(p) ?? 0))
+            .Concat(rest.Where(p => DelayOf(p) <= 0));
+        var outList = new List<VlessProfile>();
+        if (first != null) outList.Add(first);
+        outList.AddRange(ordered);
+        return outList;
+    }
+
+    private void Steer()
+    {
+        if (_userStopped || _connecting || !_autoSwitch) return;
+        var cur = _active;
+        var cands = _candidates;
+        if (cur == null || cands == null || cands.Count < 2) return;
+
+        // 1) первый скан после подключения: садимся по правилу (на старте пингов ещё не было)
+        if (!_seatedByScan)
+        {
+            _seatedByScan = true;
+            var best = PickSeat(cands);
+            if (best != null && !ReferenceEquals(best, cur))
+            {
+                L($"steer: посадка на '{best.Name}' ({DelayOf(best)} мс, нагрузка {LoadOf(best)?.ToString() ?? "?"}%)");
+                SwitchTo(best);
+                return;
+            }
+        }
+
+        // 2) копим сглаженный пинг текущего (медиана последних 3 сканов); база — минимум первых замеров
+        var key = RouteKey(cur);
+        if (_seatKey != key) { _seatKey = key; _seatBaseline = 0; _seatRecent.Clear(); }
+        int d = DelayOf(cur);
+        if (d <= 0) return;
+        _seatRecent.Enqueue(d);
+        while (_seatRecent.Count > 3) _seatRecent.Dequeue();
+        var sorted = _seatRecent.OrderBy(x => x).ToList();
+        int sm = sorted[sorted.Count / 2];
+        if (_seatBaseline == 0 || (_seatRecent.Count < 3 && sm < _seatBaseline)) _seatBaseline = sm;
+        if (_seatRecent.Count < 3) return;
+
+        // 3) уходим только при заметном ухудшении и только на более быстрый и не перегруженный
+        if (sm - _seatBaseline >= WorseAbsMs && sm >= _seatBaseline * WorseRatio)
+        {
+            var target = cands.Where(p => !ReferenceEquals(p, cur) && DelayOf(p) > 0 && DelayOf(p) < sm && LoadOk(p))
+                              .OrderBy(DelayOf).FirstOrDefault();
+            if (target != null)
+            {
+                L($"steer: пинг '{cur.Name}' {_seatBaseline}→{sm} мс — ухожу на '{target.Name}' ({DelayOf(target)} мс)");
+                SwitchTo(target);
+            }
+        }
+    }
+
+    private void SwitchTo(VlessProfile target)
+    {
+        var cands = _candidates;
+        int idx = cands.IndexOf(target);
+        if (idx < 0 || _connecting || _userStopped) return;
+        _connecting = true;
+        StopWatchdog();
+        StopProvider(); // TUN остаётся — kill switch держит
+        _active = null;
+        StateChanged?.Invoke(false);
+        Status?.Invoke("Переключение маршрута…");
+        BeginConnect(cands, _autoSwitch, idx);
     }
 
     // ---------- census: фоновый скан ВСЕХ маршрутов ----------
@@ -711,20 +830,35 @@ public class SingBoxManager
             if (!(_main is { HasExited: false })) return;
             keys.Add(RouteKey(p));
 
-            // активный маршрут держит watchdog — он заведомо жив, не трогаем его порт
-            if (active != null && ReferenceEquals(p, active)) { SetHealth(p, true); continue; }
+            // активный маршрут держит watchdog — он заведомо жив, не трогаем его порт; пинг меряем через
+            // рабочий socks (тёплое соединение, как и у остальных — второй запрос после хендшейка)
+            if (active != null && ReferenceEquals(p, active))
+            {
+                SetHealth(p, true);
+                SetDelay(p, TimedProbe(SocksPort));
+                continue;
+            }
 
-            SetHealth(p, CensusProbeRoute(p));
+            var ok = CensusProbeRoute(p, out var ms);
+            SetHealth(p, ok);
+            SetDelay(p, ok ? ms : 0);
         }
 
         // убрать из health маршруты, которых больше нет в списке (сменилась подписка)
         lock (_healthGate)
+        {
             foreach (var k in _routeHealth.Keys.Where(k => !keys.Contains(k)).ToList())
                 _routeHealth.Remove(k);
+            foreach (var k in _routeDelay.Keys.Where(k => !keys.Contains(k)).ToList())
+                _routeDelay.Remove(k);
+        }
+
+        try { Steer(); } catch (Exception ex) { L("steer: " + ex.Message); }
     }
 
-    private bool CensusProbeRoute(VlessProfile p)
+    private bool CensusProbeRoute(VlessProfile p, out int delayMs)
     {
+        delayMs = 0;
         StopCensusProc();
         bool started;
         try
@@ -744,8 +878,10 @@ public class SingBoxManager
         // проба по IP + «любой ответ»: без резолва домена (иначе AWG, который везёт только IP, валит
         // проверку). 3 попытки по 8с — AWG-хендшейку нужно время на первый коннект.
         for (int i = 0; i < 3 && !ok; i++) { if (_userStopped) break; ok = Probe(8000, CensusPort, "http://1.1.1.1", anyResponse: true); }
+        // пинг — второй запрос по уже поднятому маршруту (первый включал хендшейк)
+        if (ok) delayMs = TimedProbe(CensusPort);
         StopCensusProc();
-        L($"census '{p.Name}': {(ok ? "жив" : "мёртв")}");
+        L($"census '{p.Name}': {(ok ? $"жив, {delayMs} мс" : "мёртв")}");
         return ok;
     }
 
