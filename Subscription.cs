@@ -33,7 +33,8 @@ static class Subscription
     public static int RefreshViaTunnel(string subUrl, out string err)
     {
         err = "";
-        var body = Net.FetchViaTunnel(subUrl);
+        // панель собирает /sub опросом всех шлюзов — 8с по умолчанию бывает мало, подписка молча не обновлялась
+        var body = Net.FetchViaTunnel(subUrl, 30000);
         if (string.IsNullOrWhiteSpace(body)) { err = "нет ответа по туннелю"; return -1; }
         return Save(body, out err);
     }
@@ -42,7 +43,8 @@ static class Subscription
     {
         err = "";
         if (string.IsNullOrWhiteSpace(body)) { err = "пустой ответ"; return -1; }
-        File.WriteAllText(ProfilesPath, body);
+        try { File.WriteAllText(ProfilesPath, body); }
+        catch (Exception ex) { err = "не удалось сохранить подписку: " + ex.Message; return -1; }
         int n = 0;
         foreach (var raw in body.Split('\n'))
         {
