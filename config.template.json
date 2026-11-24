@@ -13,6 +13,7 @@
     {
       "type": "tun",
       "tag": "tun-in",
+      "interface_name": "QartzTUN",
       "address": ["172.19.0.1/30"],
       "mtu": 1400,
       "auto_route": true,

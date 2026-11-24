@@ -58,7 +58,7 @@ public class ActivationForm : Form
         _btn.Enabled = false; _status.Text = "Активация…";
         Task.Run(() =>
         {
-            int n = Subscription.Refresh(url, out var err);
+            int n = Subscription.RefreshAuto(url, out var err);
             BeginInvoke(() =>
             {
                 if (n > 0)

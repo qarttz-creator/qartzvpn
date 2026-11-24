@@ -13,7 +13,8 @@ static class Heartbeat
     /// <summary>Отправляет хартбит и возвращает серверную эпоху ре-пулла (resub_at), либо 0, если
     /// сигнала/ответа нет. Вызывающий сравнивает её со своим resub_seen: серверная новее ⇒ перечитать /sub.</summary>
     public static long Send(string controlBase, string token, string deviceId, string deviceName,
-                            string version, string gateway, IEnumerable<(string name, bool up)> routes)
+                            string version, string gateway, IEnumerable<(string name, bool up)> routes,
+                            Action<string>? log = null)
     {
         if (string.IsNullOrEmpty(controlBase) || string.IsNullOrEmpty(token)) return 0;
         var routesArr = new JsonArray();
@@ -44,6 +45,9 @@ static class Heartbeat
                     if (kv.Value != null) try { m[kv.Key] = kv.Value.GetValue<int>(); } catch { }
                 LastLoad = m;
             }
+            var subBase = (string?)node?["sub_base"];
+            if (!string.IsNullOrWhiteSpace(subBase) && Settings.MigrateSubBase(subBase))
+                log?.Invoke($"подписка: адрес центра обновлён → {subBase}");
             return node?["resub_at"]?.GetValue<long>() ?? 0;
         }
         catch { return 0; }

@@ -33,29 +33,72 @@ static class Program
 
         if (profiles.Count > 0) mgr.StartAuto(profiles);
 
-        // Heartbeat (с health маршрутов) so autostart clients also show online in the admin.
-        using var hb = new System.Threading.Timer(
-            _ => Heartbeat.Send(st.ControlBase(), st.Token(), Settings.GetOrCreateDeviceId(), Environment.MachineName,
-                                Updater.CurrentVersion, mgr.ActiveName ?? "", mgr.RouteHealth()),
-            null, 15000, 60000);
-
-        // Как только туннель встал — тянем свою подписку ПО ТУННЕЛЮ и переключаемся на свои маршруты.
+        long resubSeen = 0;
+        var subGate = new object();
         bool pulled = false;
+        DateTime lastPullUtc = DateTime.MinValue;
+
+        void PullSub(string reason)
+        {
+            lock (subGate)
+            {
+                var curSt = Settings.Load();
+                if (string.IsNullOrWhiteSpace(curSt.SubUrl) || !Net.TunnelUp()) return;
+                var before = NormalizeLines(SafeReadProfiles());
+                int n = Subscription.RefreshViaTunnel(curSt.SubUrl, out var err);
+                var act = Net.FetchViaTunnel(curSt.ControlBase() + "/activation");
+                if (!string.IsNullOrWhiteSpace(act)) ActivationSeed.SaveCache(act);
+                if (n <= 0)
+                {
+                    mgr.LogMessage($"автозапуск: /sub ({reason}) не обновился ({(string.IsNullOrEmpty(err) ? "0 маршрутов" : err)}).");
+                    return;
+                }
+                pulled = true;
+                lastPullUtc = DateTime.UtcNow;
+                var after = NormalizeLines(SafeReadProfiles());
+                if (after != before)
+                {
+                    mgr.LogMessage($"автозапуск: подписка обновлена ({n} маршрутов, {reason}) — применяю.");
+                    mgr.ApplyUpdatedProfiles(Profiles.Load());
+                }
+            }
+        }
+
+        // Heartbeat (с health маршрутов + push resub_at + авто-миграция sub_base).
+        using var hb = new System.Threading.Timer(_ =>
+        {
+            var curSt = Settings.Load();
+            long resubAt = Heartbeat.Send(curSt.ControlBase(), curSt.Token(), Settings.GetOrCreateDeviceId(),
+                                          Environment.MachineName, Updater.CurrentVersion, mgr.ActiveName ?? "",
+                                          mgr.RouteHealth(), mgr.LogMessage);
+            if (resubAt <= 0) return;
+            if (resubSeen == 0) { resubSeen = resubAt; return; }
+            if (resubAt > resubSeen)
+            {
+                resubSeen = resubAt;
+                Task.Run(() => PullSub("push resub_at"));
+            }
+        }, null, 15000, 60000);
+
+        // Как только туннель встал — тянем свою подписку ПО ТУННЕЛЮ (при ошибке повторяем) и далее раз в 6ч.
         using var sub = new System.Threading.Timer(_ =>
         {
-            if (pulled || string.IsNullOrWhiteSpace(st.SubUrl) || !Net.TunnelUp()) return;
-            pulled = true;
-            var before = SafeReadProfiles();
-            int n = Subscription.RefreshViaTunnel(st.SubUrl, out string _err);
-            var act = Net.FetchViaTunnel(st.ControlBase() + "/activation");
-            if (!string.IsNullOrWhiteSpace(act)) ActivationSeed.SaveCache(act);
-            if (n > 0 && SafeReadProfiles().Trim() != before.Trim())
-                mgr.StartAuto(Profiles.Load());   // с активации на свои маршруты
-        }, null, 8000, 15000);
+            if (pulled && DateTime.UtcNow - lastPullUtc < TimeSpan.FromHours(6)) return;
+            PullSub(pulled ? "6h" : "start");
+        }, null, 8000, 30000);
 
         // Keep the process alive until the task is ended or Windows shuts down.
         // SingBoxManager hooks ProcessExit to stop the cores cleanly.
         new ManualResetEvent(false).WaitOne();
+    }
+
+    private static string NormalizeLines(string s)
+    {
+        var lines = s.Replace("\r\n", "\n").Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && !l.StartsWith("#"))
+            .OrderBy(l => l, StringComparer.Ordinal);
+        return string.Join("\n", lines);
     }
 
     private static string SafeReadProfiles()

@@ -9,11 +9,11 @@ namespace QarttzVPN;
 /// </summary>
 public class Settings
 {
-    public bool Routing = true;
+    public bool Routing = false;
     public bool IpFilter = false;
     public bool AppsFilter = false;
     public bool DomainFilter = false; // route a user-defined list of domains straight out (bypass VPN)
-    public bool RuDirect = true;   // route RU domains (.ru/.рф/.su) straight out, bypassing the VPN
+    public bool RuDirect = false;   // route RU domains (.ru/.рф/.su) straight out, bypassing the VPN
     public string SubUrl = "";   // subscription link from the admin (https://…/sub?token=…)
     public string DeviceId = ""; // стабильный id установки (генерится один раз) — для учёта устройств в панели
 
@@ -28,11 +28,11 @@ public class Settings
                 var o = JsonNode.Parse(File.ReadAllText(PathOf))!.AsObject();
                 return new Settings
                 {
-                    Routing    = (bool?)o["routing"]    ?? true,
+                    Routing    = (bool?)o["routing"]    ?? false,
                     IpFilter   = (bool?)o["ipFilter"]   ?? false,
                     AppsFilter = (bool?)o["appsFilter"] ?? false,
                     DomainFilter = (bool?)o["domainFilter"] ?? false,
-                    RuDirect   = (bool?)o["ruDirect"]   ?? true,
+                    RuDirect   = (bool?)o["ruDirect"]   ?? false,
                     SubUrl     = (string?)o["subUrl"]   ?? "",
                     DeviceId   = (string?)o["deviceId"] ?? "",
                 };
@@ -92,5 +92,27 @@ public class Settings
     {
         try { var u = new Uri(SubUrl); return $"{u.Scheme}://{u.Authority}"; }
         catch { return ""; }
+    }
+
+    /// <summary>Авто-миграция адреса центра (например, со старого 222 на Токио): если сервер в /hb
+    /// отдал новый sub_base, переписываем scheme://host:port в SubUrl, сохраняя путь и ?token=…</summary>
+    public static bool MigrateSubBase(string newBase)
+    {
+        if (string.IsNullOrWhiteSpace(newBase)) return false;
+        try
+        {
+            var nb = new Uri(newBase.Trim().TrimEnd('/'));
+            if (nb.Scheme != "http" && nb.Scheme != "https") return false;
+            var st = Load();
+            if (string.IsNullOrWhiteSpace(st.SubUrl)) return false;
+            var cur = new Uri(st.SubUrl);
+            var curBase = $"{cur.Scheme}://{cur.Authority}";
+            var targetBase = $"{nb.Scheme}://{nb.Authority}";
+            if (string.Equals(curBase, targetBase, StringComparison.OrdinalIgnoreCase)) return false;
+            st.SubUrl = targetBase + cur.PathAndQuery;
+            st.Save();
+            return true;
+        }
+        catch { return false; }
     }
 }

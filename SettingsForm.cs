@@ -15,6 +15,8 @@ public class SettingsForm : Form
     private readonly Button _domEdit = new();
     private bool _initAuto;
 
+    public bool SubscriptionChanged { get; private set; }
+
     private static string ProfilesPath => Path.Combine(AppContext.BaseDirectory, "profiles.txt");
     private static string ExcludePath  => Path.Combine(AppContext.BaseDirectory, "exclude.txt");
     private static string AppsPath     => Path.Combine(AppContext.BaseDirectory, "apps.txt");
@@ -42,9 +44,11 @@ public class SettingsForm : Form
             Location = new Point(20, 40), AutoSize = false, Size = new Size(400, 34),
             Font = new Font("Segoe UI", 8)
         };
-        var pEdit = FlatButton("Сменить подписку…", new Point(20, 74), 195);
+        var pRefresh = FlatButton("Обновить подписку", new Point(20, 74), 142);
+        pRefresh.Click += (_, _) => RefreshSub(pRefresh);
+        var pEdit = FlatButton("Сменить…", new Point(168, 74), 104);
         pEdit.Click += (_, _) => ChangeSub();
-        var pUpd = FlatButton("Проверить обновление", new Point(223, 74), 197);
+        var pUpd = FlatButton("Обновление ПО", new Point(278, 74), 142);
         pUpd.Click += (_, _) => CheckUpdate();
 
         // --- Маршрутизация ---
@@ -127,7 +131,7 @@ public class SettingsForm : Form
         cancel.Click += (_, _) => Close();
 
         Controls.AddRange(new Control[] {
-            hProf, pInfo, pEdit, pUpd, hRoute, _routing, rHint,
+            hProf, pInfo, pRefresh, pEdit, pUpd, hRoute, _routing, rHint,
             _ipF, ipSub, _ipEdit, _appF, appSub, _appEdit,
             _domF, domSub, _domEdit,
             _ruDirect, hAuto, _autostart, autoSub, applyHint, save, cancel
@@ -220,10 +224,45 @@ public class SettingsForm : Form
         return tb;
     }
 
+    private void RefreshSub(Button btn)
+    {
+        var st = Settings.Load();
+        if (string.IsNullOrWhiteSpace(st.SubUrl))
+        {
+            MessageBox.Show("Подписка ещё не настроена. Нажмите «Сменить…» и вставьте ссылку.", "QartzVPN");
+            return;
+        }
+        btn.Enabled = false;
+        btn.Text = "Обновление…";
+        Cursor = Cursors.WaitCursor;
+        Task.Run(() =>
+        {
+            int n = Subscription.RefreshAuto(st.SubUrl, out var err);
+            if (!IsHandleCreated) return;
+            BeginInvoke(() =>
+            {
+                Cursor = Cursors.Default;
+                btn.Enabled = true;
+                btn.Text = "Обновить подписку";
+                if (n > 0)
+                {
+                    SubscriptionChanged = true;
+                    MessageBox.Show($"Подписка обновлена: получено маршрутов — {n}.", "QartzVPN");
+                }
+                else
+                {
+                    MessageBox.Show("Не удалось обновить подписку: " + (string.IsNullOrEmpty(err) ? "нет маршрутов" : err),
+                        "QartzVPN", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            });
+        });
+    }
+
     private void ChangeSub()
     {
         using var f = new ActivationForm();
         f.ShowDialog(this);
+        if (f.Activated) SubscriptionChanged = true;
     }
 
     private void CheckUpdate()
@@ -306,9 +345,9 @@ public class SettingsForm : Form
     {
         var f = EditorForm("Домены мимо туннеля — по одному на строку");
         var tb = MakeEditor(f, File.Exists(DomainsPath) ? File.ReadAllText(DomainsPath) : "");
-        var hint = EditorHint(f, "Домен на строку — он и поддомены идут напрямую, мимо VPN: "
+        var hint = EditorHint(f, "Домен на строку — он и поддомены идут напрямую, мимо VPN (включая DNS): "
                               + "intranet.company.local, nas.home, example.com. Комментарий — после #. "
-                              + "Локальные зоны (.local/.lan/.home и приватные IP) и так идут напрямую.");
+                              + "По умолчанию весь трафик идёт в туннель.");
         var save = EditorSave(f);
         save.Click += (_, _) =>
         {

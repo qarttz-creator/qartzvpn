@@ -19,7 +19,9 @@ public class MainForm : Form
     private System.Windows.Forms.Timer? _poll;
     private System.Windows.Forms.Timer? _routeTimer;   // обновляет строку маршрутов, пока подключены
     private bool _bootstrap;     // текущие _profiles — это маршруты активации (своих ещё нет)
-    private volatile bool _subPulled;  // подписку по туннелю тянем один раз за подключение
+    private volatile bool _subPulled;  // подписку по туннелю тянем один раз за подключение (пока не успеет)
+    private volatile bool _subPulling; // защита от параллельных ре-пуллов /sub
+    private int _subRetries;           // сколько раз ретраили неудачный ре-пулл в текущей сессии
 
     /// <summary>Lets the settings dialog tear down the GUI's own tunnel before enabling the SYSTEM
     /// autostart task, so the two don't fight over the TUN / port 24808.</summary>
@@ -190,9 +192,20 @@ public class MainForm : Form
 
     private void OpenSettings()
     {
-        using (var f = new SettingsForm()) f.ShowDialog(this);
+        var before = NormalizeLines(SafeRead(ProfilesPath));
+        bool subChanged;
+        using (var f = new SettingsForm())
+        {
+            f.ShowDialog(this);
+            subChanged = f.SubscriptionChanged;
+        }
         LoadProfiles(); // подписка/фильтры могли измениться
         RefreshAutostartMode();
+        if (subChanged && _connected && !_autostartMode && _profiles.Count > 0 && NormalizeLines(SafeRead(ProfilesPath)) != before)
+        {
+            _mgr.LogMessage("подписка обновлена вручную — применяю маршруты.");
+            _mgr.ApplyUpdatedProfiles(_profiles);
+        }
     }
 
     private void Toggle()
@@ -219,6 +232,7 @@ public class MainForm : Form
                 }
                 SetUi(null);
                 _subPulled = false;          // новая сессия — подписку по туннелю тянем заново
+                _subRetries = 0;
                 _mgr.StartAuto(_profiles);   // всегда авто: перебор всех шлюзов + failover
             }
         }
@@ -262,7 +276,7 @@ public class MainForm : Form
             _tray.Text = "QartzVPN — подключено";
             StartHeartbeat();
             StartRouteTimer();
-            if (!_subPulled) { _subPulled = true; PullSubOverTunnel(); }
+            if (!_subPulled) PullSubOverTunnel();
             StartSubTimer();
         }
         else
@@ -367,45 +381,82 @@ public class MainForm : Form
     {
         var st = Settings.Load();
         long resubAt = Heartbeat.Send(st.ControlBase(), st.Token(), Settings.GetOrCreateDeviceId(), Environment.MachineName,
-                                      Updater.CurrentVersion, _mgr.ActiveName ?? "", _mgr.RouteHealth());
+                                      Updater.CurrentVersion, _mgr.ActiveName ?? "", _mgr.RouteHealth(), _mgr.LogMessage);
         if (resubAt <= 0) return;
         // Push-подписка: сервер отдал эпоху «раздать всем». Первое ненулевое значение после запуска
         // просто запоминаем (на свежем коннекте подписка и так уже перечитана). Дальше, если оператор
         // в админке нажал «раздать всем» (эпоха выросла), перечитываем /sub по туннелю. Реконнект
         // внутри PullSubOverTunnel произойдёт только если подписка реально изменилась.
         if (_resubSeen == 0) { _resubSeen = resubAt; return; }
-        if (resubAt > _resubSeen) { _resubSeen = resubAt; PullSubOverTunnel(); }
+        if (resubAt > _resubSeen)
+        {
+            _resubSeen = resubAt;
+            _mgr.LogMessage($"подписка: получен push resub_at={resubAt}, перечитываю /sub.");
+            PullSubOverTunnel();
+        }
     }
 
     /// <summary>
-    /// Туннель встал — тянем СВОЮ подписку ПО ТУННЕЛЮ (не по открытому интернету) и, если это не те
-    /// маршруты, на которых поднялись (bootstrap через активацию), переключаемся на свои. Так общий
-    /// профиль активации перестаёт возить трафик. Один раз за подключение.
+    /// Туннель встал — тянем СВОЮ подписку ПО ТУННЕЛЮ (не по открытому интернету) и, если маршруты
+    /// изменились (в т.ч. переход с bootstrap на свои или новые шлюзы), применяем их. При ошибке
+    /// не отмечаем _subPulled=true и делаем повторную попытку через 60с.
     /// </summary>
     private void PullSubOverTunnel()
     {
         var st = Settings.Load();
-        if (string.IsNullOrWhiteSpace(st.SubUrl)) return;
+        if (string.IsNullOrWhiteSpace(st.SubUrl) || _subPulling) return;
+        _subPulling = true;
         Task.Run(() =>
         {
-            var before = SafeRead(ProfilesPath);
-            int n = Subscription.RefreshViaTunnel(st.SubUrl, out _);
-            var after = SafeRead(ProfilesPath);
-
-            // самообновление профиля активации (bootstrap-маршрутов) по туннелю
-            var act = Net.FetchViaTunnel(st.ControlBase() + "/activation");
-            if (!string.IsNullOrWhiteSpace(act)) ActivationSeed.SaveCache(act);
-
-            if (n > 0 && after.Trim() != before.Trim() && IsHandleCreated)
+            try
             {
-                BeginInvoke(() =>
+                var before = NormalizeLines(SafeRead(ProfilesPath));
+                int n = Subscription.RefreshViaTunnel(st.SubUrl, out var err);
+                var after = NormalizeLines(SafeRead(ProfilesPath));
+
+                // самообновление профиля активации (bootstrap-маршрутов) по туннелю
+                var act = Net.FetchViaTunnel(st.ControlBase() + "/activation");
+                if (!string.IsNullOrWhiteSpace(act)) ActivationSeed.SaveCache(act);
+
+                if (n <= 0)
                 {
-                    LoadProfiles();   // профили обновились (свои), _bootstrap снимется
-                    if (_connected && !_autostartMode && _profiles.Count > 0)
-                        _mgr.StartAuto(_profiles);   // переключаемся с активации на свои маршруты
-                });
+                    _mgr.LogMessage($"подписка: не удалось обновить по туннелю ({(string.IsNullOrEmpty(err) ? "0 маршрутов" : err)}).");
+                    if (_connected && _subRetries < 5)
+                    {
+                        _subRetries++;
+                        Task.Delay(60000).ContinueWith(_ => { if (_connected && !_subPulled) PullSubOverTunnel(); });
+                    }
+                    return;
+                }
+
+                _subPulled = true;
+                _subRetries = 0;
+                bool changed = after != before;
+                _mgr.LogMessage(changed
+                    ? $"подписка обновлена по туннелю ({n} маршрутов) — применяю изменения."
+                    : $"подписка проверена по туннелю ({n} маршрутов, без изменений).");
+
+                if (changed && IsHandleCreated)
+                {
+                    BeginInvoke(() =>
+                    {
+                        LoadProfiles();   // профили обновились (свои), _bootstrap снимется
+                        if (_connected && !_autostartMode && _profiles.Count > 0)
+                            _mgr.ApplyUpdatedProfiles(_profiles);
+                    });
+                }
             }
+            finally { _subPulling = false; }
         });
+    }
+
+    private static string NormalizeLines(string s)
+    {
+        var lines = s.Replace("\r\n", "\n").Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && !l.StartsWith("#"))
+            .OrderBy(l => l, StringComparer.Ordinal);
+        return string.Join("\n", lines);
     }
 
     private static string SafeRead(string path)

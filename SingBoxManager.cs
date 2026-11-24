@@ -39,6 +39,7 @@ public class SingBoxManager
     private volatile bool _connecting;
     private volatile bool _userStopped;
     private List<VlessProfile> _candidates = new();
+    private string _mainServerKey = "";
     private bool _autoSwitch;
     private VlessProfile? _active;
     private int _probeFails;
@@ -116,6 +117,9 @@ public class SingBoxManager
         if (Build.DevTools) { try { File.AppendAllText(_logPath, line + Environment.NewLine); } catch { } }
         Log?.Invoke(s);
     }
+
+    /// <summary>Пишет строку в лог-буфер менеджера (попадёт в зашифрованный экспорт).</summary>
+    public void LogMessage(string s) => L(s);
 
     /// <summary>Снимок лога из памяти — источник для зашифрованного экспорта (LogExport).</summary>
     public string LogSnapshot()
@@ -206,37 +210,55 @@ public class SingBoxManager
 
     // ---------- config builders ----------
 
-    /// <summary>The TUN sing-box: everything → socks proxy (24808); gateway IPs, private IPs,
-    /// local/intranet domains, RU domains and the user IP/domain/app exclusions go direct. Local and
-    /// private-IP bypass are always on (otherwise LAN names can't resolve and LAN hosts are
-    /// unreachable); the IP/domain/app filters are opt-in.</summary>
+    /// <summary>The TUN sing-box: by default ALL traffic (including DNS) goes into the tunnel;
+    /// the only unconditional bypass is the gateway server IPs. Any manual exclusions enabled by the
+    /// user (RU domains, IP/subnet list, domain list, app list) bypass BOTH routing and DNS (using
+    /// the local/router DNS resolver).</summary>
     private void BuildMainConfig(List<VlessProfile> cands)
     {
         if (!File.Exists(TemplatePath))
             throw new FileNotFoundException("Не найден config.template.json.", TemplatePath);
 
         var root = JsonNode.Parse(File.ReadAllText(TemplatePath))!.AsObject();
-        var rules = root["route"]!.AsObject()["rules"]!.AsArray();
+        var routeObj = root["route"]!.AsObject();
+        var rules = routeObj["rules"]!.AsArray();
 
-        // Gateway server IPs must bypass the tunnel (so the provider can reach them without looping).
+        // 1) Единственное безусловное исключение — IP самих VPN-шлюзов из конфигурации
+        // (и в route.rules -> direct, и в tun.route_exclude_address на уровне таблицы маршрутов ОС).
         var srv = new JsonArray();
+        var srvSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in cands)
             foreach (var c in p.ServerCidrs())
-                srv.Add(c);
+                if (srvSet.Add(c)) srv.Add(c);
         if (srv.Count > 0)
         {
             rules.Add(new JsonObject { ["ip_cidr"] = srv, ["action"] = "route", ["outbound"] = "direct" });
             L($"Серверы шлюзов исключены из туннеля: {srv.Count} адрес(ов).");
         }
+        _mainServerKey = ServerCidrsKey(cands);
+
+        var tunExclude = new JsonArray();
+        var tunExSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void AddTunEx(string cidr) { if (tunExSet.Add(cidr)) tunExclude.Add(cidr); }
+        foreach (var c in srvSet) AddTunEx(c);
+
+        var dns = root["dns"]!.AsObject();
+        dns["servers"]!.AsArray().Add(new JsonObject { ["type"] = "local", ["tag"] = "dns-local" });
+        if (dns["rules"] is not JsonArray dnsRules) { dnsRules = new JsonArray(); dns["rules"] = dnsRules; }
+        routeObj["default_domain_resolver"] = "dns-local";
 
         var st = Settings.Load();
 
-        // RU domains → direct (bypass VPN) so RU marketplaces/RKN see the real IP. .рф = xn--p1ai.
+        // 2) Ручные исключения — всё, что включено пользователем, идёт напрямую ПОЛНОСТЬЮ (трафик + локальный DNS).
+
+        // RU-домены (.ru/.рф/.su) напрямую + их DNS напрямую через роутер/ОС
         if (st.RuDirect)
         {
-            var ru = new JsonArray { ".ru", ".su", "xn--p1ai" };
-            rules.Add(new JsonObject { ["domain_suffix"] = ru, ["action"] = "route", ["outbound"] = "direct" });
-            L("RU-домены (.ru/.рф/.su) идут напрямую.");
+            var ruRoute = new JsonArray { ".ru", ".su", ".xn--p1ai" };
+            var ruDns = new JsonArray { ".ru", ".su", ".xn--p1ai" };
+            rules.Add(new JsonObject { ["domain_suffix"] = ruRoute, ["action"] = "route", ["outbound"] = "direct" });
+            dnsRules.Add(new JsonObject { ["domain_suffix"] = ruDns, ["server"] = "dns-local" });
+            L("RU-домены (.ru/.рф/.su) идут напрямую (включая DNS).");
         }
 
         if (st.Routing)
@@ -247,7 +269,11 @@ public class SingBoxManager
                 if (ex.Count > 0)
                 {
                     var arr = new JsonArray();
-                    foreach (var c in ex) arr.Add(c);
+                    foreach (var c in ex)
+                    {
+                        arr.Add(c);
+                        if (!OverlapsTun(c)) AddTunEx(c);
+                    }
                     rules.Add(new JsonObject { ["ip_cidr"] = arr, ["action"] = "route", ["outbound"] = "direct" });
                     L($"Исключения по IP: {ex.Count}");
                 }
@@ -257,55 +283,61 @@ public class SingBoxManager
                 var apps = ReadApps();
                 if (apps.Count > 0)
                 {
-                    var arr = new JsonArray();
-                    foreach (var a in apps) arr.Add(a);
-                    rules.Add(new JsonObject { ["process_name"] = arr, ["action"] = "route", ["outbound"] = "direct" });
-                    L($"Исключения по приложениям: {apps.Count}");
+                    var arrRoute = new JsonArray();
+                    var arrDns = new JsonArray();
+                    foreach (var a in apps) { arrRoute.Add(a); arrDns.Add(a); }
+                    rules.Add(new JsonObject { ["process_name"] = arrRoute, ["action"] = "route", ["outbound"] = "direct" });
+                    dnsRules.Add(new JsonObject { ["process_name"] = arrDns, ["server"] = "dns-local" });
+                    L($"Исключения по приложениям: {apps.Count} (включая DNS)");
+                }
+            }
+            if (st.DomainFilter)
+            {
+                var userDomains = ReadDomains();
+                if (userDomains.Count > 0)
+                {
+                    var userExact = new List<string>(userDomains);
+                    var userSuffix = new List<string>();
+                    foreach (var d in userDomains) if (d.Contains('.')) userSuffix.Add("." + d);
+
+                    var dr = new JsonObject { ["domain"] = JArr(userExact), ["action"] = "route", ["outbound"] = "direct" };
+                    var dd = new JsonObject { ["domain"] = JArr(userExact), ["server"] = "dns-local" };
+                    if (userSuffix.Count > 0)
+                    {
+                        dr["domain_suffix"] = JArr(userSuffix);
+                        dd["domain_suffix"] = JArr(userSuffix);
+                    }
+                    rules.Add(dr);
+                    dnsRules.Add(dd);
+                    L($"Исключения по доменам: {userExact.Count} (включая DNS)");
                 }
             }
         }
 
-        // --- Domains (not just IPs). Two problems the IP-only template has: (1) the only DNS is
-        // remote DoH over the tunnel, so LAN/intranet names (which that resolver doesn't know) never
-        // resolve; (2) nothing sends private IPs direct, so even a resolved 192.168.x goes into the
-        // tunnel and dies. Fix: resolve local/intranet, RU and user-listed domains via the OS resolver
-        // (type:local — it knows LAN names, incl. a *.ru that only exists on the LAN, mDNS, the hosts
-        // file and VPN-pushed suffixes), and route them + private IPs straight out. Local/RU handling
-        // is always on; the user domain list is the opt-in "domain filter" (parallel to the IP filter). ---
-        string[] localSuffixes = { ".local", ".lan", ".home", ".internal", ".intranet", ".localdomain", ".corp" };
-        var userDomains = (st.Routing && st.DomainFilter) ? ReadDomains() : new List<string>();
-        var userExact = new List<string>(userDomains);          // apex (and single-label) names
-        var userSuffix = new List<string>();                    // ".name" → subdomains
-        foreach (var d in userDomains) if (d.Contains('.')) userSuffix.Add("." + d);
-
-        // DNS: send local suffixes and the user bypass list to the OS resolver (the external network's
-        // DNS — corporate/router if present, else the ISP's). RU is deliberately NOT sent here: it
-        // keeps resolving over the tunnelled DoH (dns.final), so the ISP never sees the query — RU only
-        // bypasses at the route level, not the DNS. Resolving via the local DNS leaves a trace, so it's
-        // opt-in: the user consents by adding a domain to the list. A domain_suffix like ".foo.ru"
-        // matches only *.foo.ru, NOT foo.ru itself, so the user list needs both a `domain` (exact) and
-        // a `domain_suffix` matcher — otherwise an apex such as a2nta.goldpolus.ru slips past.
-        var dns = root["dns"]!.AsObject();
-        dns["servers"]!.AsArray().Add(new JsonObject { ["type"] = "local", ["tag"] = "dns-local" });
-        if (dns["rules"] is not JsonArray dnsRules) { dnsRules = new JsonArray(); dns["rules"] = dnsRules; }
-        var dnsSuffix = new List<string>(localSuffixes); dnsSuffix.AddRange(userSuffix);
-        var localDnsRule = new JsonObject { ["domain_suffix"] = JArr(dnsSuffix), ["server"] = "dns-local" };
-        if (userExact.Count > 0) localDnsRule["domain"] = JArr(userExact);
-        dnsRules.Insert(0, localDnsRule);
-
-        // Route: local/intranet domains, the user list and private IPs bypass the tunnel. (RU route→
-        // direct is added above; local + private are always on, the user list is opt-in.)
-        rules.Add(new JsonObject { ["domain_suffix"] = JArr(localSuffixes), ["action"] = "route", ["outbound"] = "direct" });
-        if (userExact.Count > 0)
-        {
-            var dr = new JsonObject { ["domain"] = JArr(userExact), ["action"] = "route", ["outbound"] = "direct" };
-            if (userSuffix.Count > 0) dr["domain_suffix"] = JArr(userSuffix);
-            rules.Add(dr);
-            L($"Исключения по доменам: {userExact.Count}");
-        }
-        rules.Add(new JsonObject { ["ip_is_private"] = true, ["action"] = "route", ["outbound"] = "direct" });
+        if (tunExclude.Count > 0 && root["inbounds"] is JsonArray inbs && inbs.Count > 0 && inbs[0] is JsonObject tunIn)
+            tunIn["route_exclude_address"] = tunExclude;
 
         File.WriteAllText(MainConfigPath, root.ToJsonString(Json.Opts));
+    }
+
+    private static string ServerCidrsKey(List<VlessProfile> cands)
+    {
+        var set = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in cands)
+            foreach (var c in p.ServerCidrs())
+                set.Add(c);
+        return string.Join(",", set);
+    }
+
+    private static bool OverlapsTun(string cidr)
+    {
+        try
+        {
+            if (System.Net.IPNetwork.TryParse(cidr, out var net))
+                return net.Contains(IPAddress.Parse("172.19.0.1")) || net.Contains(IPAddress.Parse("172.19.0.2"));
+        }
+        catch { }
+        return false;
     }
 
     private void BuildXrayConfig(VlessProfile profile) => BuildXrayConfig(profile, SocksPort, XrayConfigPath);
@@ -474,6 +506,19 @@ public class SingBoxManager
         return false;
     }
 
+    // AWG везёт только IP-пакеты и awg-provider.json не содержит DNS-резолвера — домен www.gstatic.com
+    // падает с "cannot marshal DNS message". Для AWG проверяем по IP (как в census).
+    private bool ProbeRouteOk(VlessProfile p, int perTryMs, int tries)
+    {
+        if (p.Kind != ProfileKind.Awg) return ProbeOk(perTryMs, tries);
+        for (int i = 0; i < tries; i++)
+        {
+            if (_userStopped) return false;
+            if (Probe(perTryMs, SocksPort, "http://1.1.1.1", anyResponse: true)) return true;
+        }
+        return false;
+    }
+
     // ---------- public entry points ----------
 
     public void Start(VlessProfile profile)
@@ -487,6 +532,19 @@ public class SingBoxManager
         _userStopped = false;
         _seatedByScan = false;
         BeginConnect(new List<VlessProfile>(profiles), autoSwitch: true, startIndex: 0);
+    }
+
+    /// <summary>Применяет обновлённую подписку: если изменился набор IP шлюзов, пересобирает и
+    /// перезапускает _main, чтобы новые адреса попали в route_exclude_address и direct-исключения.</summary>
+    public void ApplyUpdatedProfiles(List<VlessProfile> profiles)
+    {
+        if (profiles.Count == 0) return;
+        if (_main is { HasExited: false } && ServerCidrsKey(profiles) != _mainServerKey)
+        {
+            L("Список IP шлюзов изменился — пересобираю main (TUN) под новую подписку.");
+            StopMain();
+        }
+        StartAuto(profiles);
     }
 
     private void BeginConnect(List<VlessProfile> cands, bool autoSwitch, int startIndex)
@@ -549,7 +607,7 @@ public class SingBoxManager
             if (_userStopped) { Teardown(); return; }
             if (!up) { SetHealth(p, false); StopProvider(); continue; }
 
-            if (!ProbeOk(8000, 2)) { SetHealth(p, false); L($"'{p.Name}': сквозная проверка не прошла."); StopProvider(); continue; }
+            if (!ProbeRouteOk(p, 8000, 2)) { SetHealth(p, false); L($"'{p.Name}': сквозная проверка не прошла."); StopProvider(); continue; }
             if (_userStopped) { Teardown(); return; }
 
             SetHealth(p, true);
@@ -632,8 +690,11 @@ public class SingBoxManager
     // Терпимая проба живого туннеля: любой из двух независимых хостов ответил ⇒ туннель жив.
     // Два хоста, чтобы точечный троттлинг/блокировка одного не читались как «связь потеряна».
     private bool WatchdogProbe()
-        => Probe(4000, SocksPort, "http://www.gstatic.com/generate_204", anyResponse: false)
-        || Probe(4000, SocksPort, "http://cp.cloudflare.com/generate_204", anyResponse: false);
+        => _active?.Kind == ProfileKind.Awg
+            ? Probe(4000, SocksPort, "http://1.1.1.1", anyResponse: true)
+              || Probe(4000, SocksPort, "http://1.0.0.1", anyResponse: true)
+            : Probe(4000, SocksPort, "http://www.gstatic.com/generate_204", anyResponse: false)
+              || Probe(4000, SocksPort, "http://cp.cloudflare.com/generate_204", anyResponse: false);
 
     private void OnProcDied(string label)
     {

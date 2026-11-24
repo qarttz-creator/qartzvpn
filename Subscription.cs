@@ -39,12 +39,26 @@ static class Subscription
         return Save(body, out err);
     }
 
+    /// <summary>Умное обновление: если туннель поднят — сначала тянет по туннелю (с fallback напрямую),
+    /// иначе — напрямую. Подходит для ручной кнопки и окна активации.</summary>
+    public static int RefreshAuto(string subUrl, out string err)
+    {
+        if (Net.TunnelUp())
+        {
+            int n = RefreshViaTunnel(subUrl, out err);
+            if (n > 0) return n;
+            int direct = Refresh(subUrl, out var err2);
+            if (direct > 0) { err = ""; return direct; }
+            if (string.IsNullOrEmpty(err)) err = err2;
+            return direct;
+        }
+        return Refresh(subUrl, out err);
+    }
+
     private static int Save(string body, out string err)
     {
         err = "";
         if (string.IsNullOrWhiteSpace(body)) { err = "пустой ответ"; return -1; }
-        try { File.WriteAllText(ProfilesPath, body); }
-        catch (Exception ex) { err = "не удалось сохранить подписку: " + ex.Message; return -1; }
         int n = 0;
         foreach (var raw in body.Split('\n'))
         {
@@ -52,6 +66,9 @@ static class Subscription
             if (line.Length == 0 || line.StartsWith("#")) continue;
             try { VlessProfile.Parse(line); n++; } catch { }
         }
+        if (n == 0) { err = "в ответе нет рабочих маршрутов"; return 0; }
+        try { File.WriteAllText(ProfilesPath, body); }
+        catch (Exception ex) { err = "не удалось сохранить подписку: " + ex.Message; return -1; }
         return n;
     }
 }

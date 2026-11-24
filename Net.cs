@@ -14,8 +14,9 @@ static class Net
         try
         {
             using var http = new HttpClient(SocksHandler(TimeSpan.FromSeconds(4))) { Timeout = TimeSpan.FromSeconds(5) };
-            var r = http.GetAsync("http://www.gstatic.com/generate_204").GetAwaiter().GetResult();
-            return (int)r.StatusCode == 204 || r.IsSuccessStatusCode;
+            // По IP без резолва домена — работает и через AWG (у awg-provider нет DNS-резолвера).
+            var r = http.GetAsync("http://1.1.1.1").GetAwaiter().GetResult();
+            return (int)r.StatusCode > 0;
         }
         catch { return false; }
     }
